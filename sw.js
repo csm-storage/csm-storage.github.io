@@ -1,18 +1,20 @@
-// CSM DRIVE | ULTRA PRO - Service Worker
+// CSM DRIVE | ULTRA PRO - Service Worker (Updated)
 const CACHE_NAME = 'csm-drive-v1';
+
+// লোকাল ফাইলসহ স্ট্যাটিক অ্যাসেট তালিকা
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/style.css',
   '/script.js',
   '/manifest.json',
+  '/fancybox.css',     // লোকাল পাথ (আপনার আপলোড করা ফাইল)
+  '/fancybox.umd.js',   // লোকাল পাথ (আপনার আপলোড করা ফাইল)
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap',
-  'https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css',
-  'https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js'
+  'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap'
 ];
 
-// Install: cache all static assets
+// Install: সব ফাইল ক্যাশে সেভ করা
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
@@ -25,7 +27,7 @@ self.addEventListener('install', event => {
   );
 });
 
-// Activate: clean up old caches
+// Activate: পুরনো ক্যাশে ডিলিট করা
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -34,18 +36,18 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Fetch: Cache-First with Network Fallthrough
+// Fetch: নেটওয়ার্ক না থাকলে ক্যাশে থেকে ফাইল দেওয়া
 self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET, Firebase, and Cloudinary requests (dynamic/API)
+  // POST বা ফায়ারবেস/ক্লাউডিনারি রিকোয়েস্টগুলো বাদ দেওয়া
   if (request.method !== 'GET') return;
-  if (url.hostname.includes('firebaseio.com') || url.hostname.includes('googleapis.com') && url.pathname.includes('/identitytoolkit')) return;
+  if (url.hostname.includes('firebaseio.com') || (url.hostname.includes('googleapis.com') && url.pathname.includes('/identitytoolkit'))) return;
   if (url.hostname.includes('cloudinary.com') && url.pathname.includes('/upload')) return;
   if (url.hostname.includes('api.cloudinary.com')) return;
 
-  // For Cloudinary media (images/videos) - Network First to ensure freshness but cache for offline
+  // মিডিয়া ফাইলের জন্য Network-First এপ্রোচ (যাতে নতুন ফটো দেখা যায়)
   if (url.hostname.includes('cloudinary.com') || url.hostname.includes('res.cloudinary.com')) {
     event.respondWith(
       fetch(request)
@@ -61,7 +63,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Cache-First for everything else
+  // অন্যান্য ফাইলের জন্য Cache-First এপ্রোচ
   event.respondWith(
     caches.match(request).then(cached => {
       if (cached) return cached;
@@ -72,7 +74,6 @@ self.addEventListener('fetch', event => {
         }
         return response;
       }).catch(() => {
-        // Fallback for navigation requests
         if (request.mode === 'navigate') {
           return caches.match('/index.html');
         }
@@ -81,7 +82,7 @@ self.addEventListener('fetch', event => {
   );
 });
 
-// Background Sync for queued operations
+// Background Sync হ্যান্ডল করা
 self.addEventListener('sync', event => {
   if (event.tag === 'csm-sync-queue') {
     event.waitUntil(processSyncQueue());
@@ -89,19 +90,6 @@ self.addEventListener('sync', event => {
 });
 
 async function processSyncQueue() {
-  // Notify all clients to process their sync queue
   const clients = await self.clients.matchAll();
   clients.forEach(client => client.postMessage({ type: 'PROCESS_SYNC_QUEUE' }));
 }
-
-// Push notification support (future use)
-self.addEventListener('push', event => {
-  if (event.data) {
-    const data = event.data.json();
-    self.registration.showNotification(data.title || 'CSM DRIVE', {
-      body: data.body || '',
-      icon: '/manifest.json',
-      badge: '/manifest.json'
-    });
-  }
-});
