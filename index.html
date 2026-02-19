@@ -11,9 +11,7 @@
 
     <link rel="manifest" href="manifest.json">
 
-    <!-- Fancybox CSS (also cached in sw.js STATIC_ASSETS) -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css"/>
-    <!-- FontAwesome (also cached) -->
+    <!-- FontAwesome (cached) -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <!-- Google Fonts (also cached) -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -307,8 +305,8 @@
 <!-- Modals Container -->
 <div id="modalContainer"></div>
 
-<!-- Fancybox JS (also cached in sw.js STATIC_ASSETS) -->
-<script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
+<!-- NexusLightbox — custom zero-dependency futuristic lightbox (replaces Fancybox) -->
+<script src="lightbox.js"></script>
 
 <!-- App Script (ES module for Firebase imports) -->
 <script type="module" src="script.js"></script>

@@ -1,14 +1,12 @@
-// CSM DRIVE | ULTRA PRO - Service Worker v2
-const CACHE_NAME = 'csm-drive-v2';
+// CSM DRIVE | ULTRA PRO - Service Worker v3
+const CACHE_NAME = 'csm-drive-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/style.css',
   '/script.js',
+  '/lightbox.js',
   '/manifest.json',
-  // Fancybox CSS + JS (both included)
-  'https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css',
-  'https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js',
   // FontAwesome
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
   // Google Fonts

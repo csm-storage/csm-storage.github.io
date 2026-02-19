@@ -1,5 +1,5 @@
-// CSM DRIVE | ULTRA PRO - script.js v2
-// Fixes: (1) Offline Fancybox uses IDB blob, (2) Upload auto-sync via SW + online event, (3) Fancybox.bind after every render
+// CSM DRIVE | ULTRA PRO - script.js v3
+// Custom NexusLightbox (zero CDN deps), offline blob preview, background sync uploads
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
@@ -485,7 +485,7 @@ function loadData() {
         updateStats();
         render();
 
-        // Background: cache image blobs for offline Fancybox (BUG FIX #1)
+        // Background: cache image blobs for offline lightbox
         if (navigator.onLine) {
             setTimeout(preCacheAllImages, 1000);
         }
@@ -575,8 +575,33 @@ function getVisibleFiles() {
     return list;
 }
 
+// ===== NEXUS LIGHTBOX GALLERY BUILDER =====
+// Builds the items array for NexusLightbox from the current visible list.
+// Works fully offline: uses offlineData (base64 blob) when available.
+function buildLightboxItems(list) {
+    return list.filter(f => !f.trash).map(file => {
+        let thumbUrl = file.url || '';
+        if (thumbUrl.includes('/upload/')) thumbUrl = thumbUrl.replace('/upload/', '/upload/w_200,q_auto,f_auto/');
+        const folderObj = folders.find(fo => fo.id === file.folder);
+        const dateStr = file.time
+            ? new Date(file.time).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            : '—';
+        return {
+            id:          file.id,
+            src:         file.url || '',
+            thumb:       thumbUrl,
+            offlineData: file.offlineData || null,
+            name:        file.name || 'Untitled',
+            size:        file.size || '—',
+            date:        dateStr,
+            cat:         file.cat || 'image',
+            starred:     !!file.starred,
+            folder:      folderObj ? folderObj.name : 'No folder',
+        };
+    });
+}
+
 // ===== RENDER =====
-// BUG FIX #1 + #3: use offlineData for Fancybox href when offline; always call Fancybox.bind after render
 function render() {
     const grid = document.getElementById('fileGrid');
     grid.innerHTML = '';
@@ -607,18 +632,14 @@ function render() {
     }
 
     const isOffline = !navigator.onLine;
+    // Build the lightbox gallery for the non-trash items in the current view
+    const lbItems = buildLightboxItems(list);
 
     list.forEach((file, idx) => {
         let thumb = file.url || '';
         if (thumb.includes('/upload/')) thumb = thumb.replace('/upload/', '/upload/w_400,q_auto,f_auto/');
 
-        // BUG FIX #1: choose the right src for Fancybox
-        // If offline and we have cached blob data, use it. Otherwise use the original URL.
-        const lightboxSrc = (isOffline && file.offlineData)
-            ? file.offlineData
-            : (file.url || '');
-
-        // Thumbnail also uses offlineData if offline
+        // Use offlineData blob as thumbnail source when offline
         const thumbSrc = (isOffline && file.offlineData) ? file.offlineData : thumb;
 
         const isVid = file.cat === 'video';
@@ -646,9 +667,10 @@ function render() {
             previewHTML = `<div style="width:100%;height:100%;background:#0a0a15;display:flex;align-items:center;justify-content:center;">
                 <i class="fas fa-lock" style="font-size:2rem;color:rgba(255,170,0,0.3);"></i></div>`;
         } else if (isVid) {
-            // For offline videos, don't try to load the video src (will fail) — show placeholder
             const videoSrc = isOffline ? '' : `${thumbSrc}#t=0.1`;
-            previewHTML = `${videoSrc ? `<video src="${videoSrc}" muted preload="metadata" playsinline></video>` : `<div style="width:100%;height:100%;background:#0a0a15;display:flex;align-items:center;justify-content:center;"><i class="fas fa-video" style="font-size:2rem;color:rgba(168,85,247,0.4);"></i></div>`}
+            previewHTML = `${videoSrc
+                ? `<video src="${videoSrc}" muted preload="metadata" playsinline></video>`
+                : `<div style="width:100%;height:100%;background:#0a0a15;display:flex;align-items:center;justify-content:center;"><i class="fas fa-video" style="font-size:2rem;color:rgba(168,85,247,0.4);"></i></div>`}
             <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:32px;height:32px;background:rgba(0,0,0,0.6);border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid rgba(255,255,255,0.2);">
                 <i class="fas fa-play" style="color:white;font-size:0.7rem;margin-left:2px;"></i></div>`;
         } else {
@@ -680,16 +702,12 @@ function render() {
             ? `<div class="select-check ${selectedIds.has(file.id) ? 'checked' : ''}" onclick="event.stopPropagation(); window.toggleSelect('${file.id}')"></div>`
             : '';
 
-        // BUG FIX #1 + #3: Fancybox data-src uses lightboxSrc (offline blob or live URL)
-        // Only bind fancybox on non-locked, non-select-mode images
-        const fancyboxAttr = (!isLocked && !selectMode && !isVid)
-            ? `data-fancybox="gallery" data-src="${lightboxSrc}" data-caption="${file.name || ''}"`
-            : '';
-        // For videos, open in new tab (offline videos can't be streamed)
-        const videoClickAttr = (!isLocked && !selectMode && isVid)
-            ? `onclick="window.openPreview('${file.id}')"`
-            : '';
-        const lockedClickAttr = isLocked ? `onclick="window.unlockFile('${file.id}')"` : '';
+        // Click on preview opens NexusLightbox
+        // Find this file's index inside the lbItems array
+        const lbIdx = lbItems.findIndex(li => li.id === file.id);
+        const previewClickAttr = (!isLocked && !selectMode)
+            ? `onclick="window.openNexusLightbox('${file.id}')"`
+            : (isLocked ? `onclick="window.unlockFile('${file.id}')"` : '');
 
         card.innerHTML = `
             ${selectCheckHTML}
@@ -699,7 +717,7 @@ function render() {
             </div>
             ${file.starred && !isLocked ? '<div class="star-badge"><i class="fas fa-star"></i></div>' : ''}
             ${file.locked ? '<div class="lock-badge"><i class="fas fa-shield-halved"></i></div>' : ''}
-            <div class="preview" ${fancyboxAttr} ${videoClickAttr} ${lockedClickAttr}>
+            <div class="preview" ${previewClickAttr}>
                 <span class="file-badge ${isVid ? 'badge-vid' : 'badge-img'}">${isVid ? 'Vid' : 'Img'}</span>
                 ${previewHTML}
                 <div class="preview-overlay"></div>
@@ -712,18 +730,51 @@ function render() {
         grid.appendChild(card);
     });
 
-    // BUG FIX #3: Always reinitialize Fancybox after every render
-    if (!selectMode) {
-        try { Fancybox.destroy(); } catch (e) {}
-        Fancybox.bind('[data-fancybox]', {
-            Toolbar: {
-                display: { left: [], middle: ['prev', 'counter', 'next'], right: ['slideshow', 'fullscreen', 'thumbs', 'close'] }
-            }
-        });
-    }
-
     updateMultiBarActions();
 }
+
+// ===== NEXUS LIGHTBOX OPENER =====
+// Called from card preview click. Finds the file in the current view,
+// builds the gallery, and opens at the right index.
+window.openNexusLightbox = (fileId) => {
+    const file = allFiles.find(f => f.id === fileId);
+    if (!file) return;
+    if (file.locked && !file._unlocked) { window.unlockFile(fileId); return; }
+
+    // Build gallery from current visible + sorted list (same order as grid)
+    let list = getVisibleFiles();
+    list.sort((a, b) => {
+        if (sortMode === 'newest') return (b.time || 0) - (a.time || 0);
+        if (sortMode === 'oldest') return (a.time || 0) - (b.time || 0);
+        if (sortMode === 'az') return (a.name || '').localeCompare(b.name || '');
+        if (sortMode === 'za') return (b.name || '').localeCompare(a.name || '');
+        if (sortMode === 'largest') return parseFloat(b.size || 0) - parseFloat(a.size || 0);
+        if (sortMode === 'smallest') return parseFloat(a.size || 0) - parseFloat(b.size || 0);
+        return 0;
+    });
+
+    const lbItems = buildLightboxItems(list);
+    const startIdx = lbItems.findIndex(li => li.id === fileId);
+
+    NexusLightbox.open(lbItems, startIdx >= 0 ? startIdx : 0, {
+        // Star toggle from inside lightbox
+        onStar: async (id, curStarred) => {
+            const f = allFiles.find(x => x.id === id);
+            if (!f) return;
+            f.starred = !curStarred;
+            NexusLightbox.updateItem(id, { starred: f.starred });
+            render(); // refresh grid star badges
+            if (navigator.onLine) update(ref(db, `${DB_PATH}/${id}`), { starred: !curStarred });
+            else { await idbPut('files', f); await addToSyncQueue({ type: 'update', id, data: { starred: !curStarred } }); }
+            showToast(curStarred ? 'Star removed' : 'File starred', 'success');
+        },
+        // Trash from inside lightbox
+        onTrash: (id) => {
+            NexusLightbox.close();
+            window.trashFile(id);
+        }
+    });
+};
 
 function updateMultiBarActions() {
     const actionsDiv = document.getElementById('multiBarActions');
@@ -860,14 +911,9 @@ window.unlockFile = id => {
 window.openPreview = id => {
     const file = allFiles.find(f => f.id === id);
     if (!file) return;
-    if (file.locked) { window.unlockFile(id); return; }
-    if (!navigator.onLine && file.offlineData) {
-        // Open the cached blob in a new tab
-        const w = window.open();
-        w.document.write(`<img src="${file.offlineData}" style="max-width:100%;max-height:100vh;margin:auto;display:block;">`);
-    } else {
-        window.open(file.url, '_blank');
-    }
+    if (file.locked && !file._unlocked) { window.unlockFile(id); return; }
+    // Always open via NexusLightbox (works online and offline)
+    window.openNexusLightbox(id);
 };
 
 window.renameFile = id => {
