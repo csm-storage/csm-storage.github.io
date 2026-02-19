@@ -1,26 +1,35 @@
 {
   "name": "CSM DRIVE | ULTRA PRO",
-  "short_name": "CSM DRIVE",
-  "description": "Secure Cloud File Manager - Ultra Pro Edition",
-  "start_url": "/",
+  "short_name": "CSM Drive",
+  "description": "Secure Cloud File Manager with full offline capabilities",
+  "start_url": "/index.html",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#030308",
   "theme_color": "#00ffcc",
-  "orientation": "any",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%23030308'/%3E%3Ctext x='50%25' y='55%25' font-size='110' text-anchor='middle' dominant-baseline='middle' fill='%2300ffcc'%3E%E2%98%81%3C/text%3E%3C/svg%3E",
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='32' fill='%23030308'/%3E%3Crect x='8' y='8' width='176' height='176' rx='28' fill='none' stroke='%2300ffcc' stroke-width='2'/%3E%3Ctext x='96' y='115' font-size='80' text-anchor='middle' fill='%2300ffcc' font-family='Arial'%3E%E2%98%81%3C/text%3E%3C/svg%3E",
       "sizes": "192x192",
       "type": "image/svg+xml",
       "purpose": "any maskable"
     },
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%23030308'/%3E%3Ctext x='50%25' y='55%25' font-size='300' text-anchor='middle' dominant-baseline='middle' fill='%2300ffcc'%3E%E2%98%81%3C/text%3E%3C/svg%3E",
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='80' fill='%23030308'/%3E%3Crect x='8' y='8' width='496' height='496' rx='76' fill='none' stroke='%2300ffcc' stroke-width='4'/%3E%3Ctext x='256' y='310' font-size='220' text-anchor='middle' fill='%2300ffcc' font-family='Arial'%3E%E2%98%81%3C/text%3E%3C/svg%3E",
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
   ],
   "categories": ["productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Upload Files",
+      "short_name": "Upload",
+      "description": "Quickly upload new files",
+      "url": "/index.html#upload"
+    }
+  ],
+  "screenshots": [],
   "prefer_related_applications": false
 }

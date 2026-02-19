@@ -6,16 +6,28 @@
     <meta name="theme-color" content="#00ffcc">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="CSM DRIVE">
+    <meta name="apple-mobile-web-app-title" content="CSM Drive">
     <title>CSM DRIVE | ULTRA PRO</title>
-    
+
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="fancybox.css">
+
+    <!-- Fancybox CSS (also cached in sw.js STATIC_ASSETS) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css"/>
+    <!-- FontAwesome (also cached) -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Google Fonts (also cached) -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+<!-- Offline Banner (BUG FIX #1 visual) -->
+<div id="offlineBanner">
+    <i class="fas fa-wifi-slash"></i>
+    <span>You're offline — viewing cached content</span>
+    <i class="fas fa-wifi-slash"></i>
+</div>
 
 <canvas id="particles"></canvas>
 <div id="toast"><span class="toast-icon">✓</span> Action Successful</div>
@@ -209,7 +221,7 @@
             </span>
         </div>
 
-        <!-- Grid -->
+        <!-- File Grid -->
         <div class="grid" id="fileGrid"></div>
     </div>
 
@@ -270,7 +282,7 @@
             </div>
         </div>
 
-        <div id="uploadQueue" style="margin-top:10px; max-height: 180px; overflow-y:auto;"></div>
+        <div id="uploadQueue" style="margin-top:10px; max-height:180px; overflow-y:auto;"></div>
         <div id="uploadStartBtnWrap" class="hidden" style="margin-top:10px;">
             <button class="btn-neon" id="uploadStartBtn" onclick="window.startUpload()" style="font-family:'Inter'; font-size:0.82rem; padding:12px;">
                 <i class="fas fa-cloud-arrow-up"></i>&nbsp; Upload Files
@@ -295,7 +307,35 @@
 <!-- Modals Container -->
 <div id="modalContainer"></div>
 
-<script src="fancybox.umd.js"></script>
+<!-- Fancybox JS (also cached in sw.js STATIC_ASSETS) -->
+<script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
+
+<!-- App Script (ES module for Firebase imports) -->
 <script type="module" src="script.js"></script>
+
+<!-- Service Worker Registration -->
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js')
+                .then(reg => {
+                    console.log('[SW] Registered:', reg.scope);
+                    // If there is a waiting SW, tell it to activate immediately
+                    if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    reg.addEventListener('updatefound', () => {
+                        const newSW = reg.installing;
+                        if (newSW) {
+                            newSW.addEventListener('statechange', () => {
+                                if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                                    console.log('[SW] New version available');
+                                }
+                            });
+                        }
+                    });
+                })
+                .catch(err => console.warn('[SW] Registration failed:', err));
+        });
+    }
+</script>
 </body>
 </html>
