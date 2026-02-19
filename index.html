@@ -2,338 +2,297 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="description" content="CSM DRIVE ULTRA PRO — Secure Cloud File Manager">
     <meta name="theme-color" content="#00ffcc">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="CSM Drive">
+    <meta name="apple-mobile-web-app-title" content="CSM DRIVE">
+    <link rel="manifest" href="manifest.json">
     <title>CSM DRIVE | ULTRA PRO</title>
 
-    <link rel="manifest" href="manifest.json">
-
-    <!-- FontAwesome (cached) -->
+    <!-- FontAwesome -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <!-- Google Fonts (also cached) -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500;600&family=Orbitron:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <!-- App CSS -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- Offline Banner (BUG FIX #1 visual) -->
-<div id="offlineBanner">
+<!-- ── Offline banner ─────────────────────────────────────────── -->
+<div id="offlineBanner" class="offline-banner hidden">
     <i class="fas fa-wifi-slash"></i>
-    <span>You're offline — viewing cached content</span>
-    <i class="fas fa-wifi-slash"></i>
+    <span>OFFLINE MODE — Showing cached data. Changes will sync when reconnected.</span>
+    <button onclick="document.getElementById('offlineBanner').classList.add('hidden')">×</button>
 </div>
 
-<canvas id="particles"></canvas>
-<div id="toast"><span class="toast-icon">✓</span> Action Successful</div>
+<!-- ── Particle canvas ───────────────────────────────────────── -->
+<canvas id="particles" class="particles"></canvas>
 
-<!-- Passcode Screen -->
-<div id="passcodeSection" class="hidden">
-    <div class="passcode-card">
-        <div class="login-logo" style="margin-bottom:20px;"><i class="fas fa-shield-halved"></i></div>
-        <div class="login-title" style="font-size:1.2rem; margin-bottom:5px;">ENTER PASSCODE</div>
-        <div class="login-sub" id="passcodeMessage">Enter your 4-digit access code</div>
-        <div class="passcode-dots" id="passcodeDots">
-            <div class="passcode-dot"></div>
-            <div class="passcode-dot"></div>
-            <div class="passcode-dot"></div>
-            <div class="passcode-dot"></div>
+<!-- ─────────────────────────── LOGIN ────────────────────────── -->
+<div id="loginSection" class="login-section">
+    <div class="login-bg-grid"></div>
+    <div class="login-card" data-aos>
+        <div class="login-logo">
+            <div class="logo-hex">
+                <i class="fas fa-database"></i>
+            </div>
+            <div class="logo-text">
+                <span class="logo-main">CSM DRIVE</span>
+                <span class="logo-sub">ULTRA PRO</span>
+            </div>
         </div>
-        <div class="keypad" id="keypad">
-            <button class="key-btn" onclick="window.enterPasscode('1')">1</button>
-            <button class="key-btn" onclick="window.enterPasscode('2')">2</button>
-            <button class="key-btn" onclick="window.enterPasscode('3')">3</button>
-            <button class="key-btn" onclick="window.enterPasscode('4')">4</button>
-            <button class="key-btn" onclick="window.enterPasscode('5')">5</button>
-            <button class="key-btn" onclick="window.enterPasscode('6')">6</button>
-            <button class="key-btn" onclick="window.enterPasscode('7')">7</button>
-            <button class="key-btn" onclick="window.enterPasscode('8')">8</button>
-            <button class="key-btn" onclick="window.enterPasscode('9')">9</button>
-            <button class="key-btn action" onclick="window.clearPasscode()"><i class="fas fa-arrow-left"></i></button>
-            <button class="key-btn" onclick="window.enterPasscode('0')">0</button>
-            <button class="key-btn action" onclick="window.cancelPasscode()"><i class="fas fa-xmark"></i></button>
+        <div class="login-dev-tag">by Csm Mohasin Alam</div>
+        <div class="login-fields">
+            <div class="field-wrap">
+                <i class="fas fa-at field-icon"></i>
+                <input type="email" id="loginEmail" placeholder="ACCESS EMAIL" autocomplete="email">
+            </div>
+            <div class="field-wrap">
+                <i class="fas fa-shield-halved field-icon"></i>
+                <input type="password" id="loginPass" placeholder="SECURE KEY" autocomplete="current-password">
+            </div>
         </div>
-    </div>
-</div>
-
-<!-- Login -->
-<div id="loginSection">
-    <div class="login-card">
-        <div class="login-logo"><i class="fas fa-cloud"></i></div>
-        <div class="login-title">CSM DRIVE</div>
-        <div class="login-sub">Secure Cloud File Manager</div>
-        <div class="input-group">
-            <label>Email Address</label>
-            <i class="fas fa-envelope input-icon"></i>
-            <input type="email" id="loginEmail" class="input-glass" placeholder="you@example.com">
-        </div>
-        <div class="input-group">
-            <label>Password</label>
-            <i class="fas fa-lock input-icon"></i>
-            <input type="password" id="loginPass" class="input-glass" placeholder="••••••••">
-        </div>
-        <button id="doLogin" class="btn-neon" style="margin-top:10px;">
-            <i class="fas fa-fingerprint"></i>&nbsp; UNLOCK SYSTEM
+        <button id="doLogin" class="login-btn">
+            <span class="btn-idle"><i class="fas fa-fingerprint"></i>&nbsp; AUTHENTICATE</span>
+            <span class="btn-loading hidden"><i class="fas fa-spinner fa-spin"></i>&nbsp; PROCESSING…</span>
         </button>
-        <div style="margin-top:15px; font-size:0.7rem; color:#333;">Secured with Firebase Auth</div>
+        <div class="login-footer">
+            <span class="lf-item"><i class="fas fa-lock"></i> AES Encrypted</span>
+            <span class="lf-item"><i class="fas fa-wifi"></i> Offline Ready</span>
+            <span class="lf-item"><i class="fas fa-cloud"></i> Cloud Sync</span>
+        </div>
     </div>
 </div>
 
-<!-- Main UI -->
-<div id="mainContent" class="hidden">
-    <header>
-        <div class="brand">
-            <div class="brand-icon"><i class="fas fa-cloud"></i></div>
-            CSM <span>DRIVE</span>
+<!-- ─────────────────────── PASSCODE ─────────────────────────── -->
+<div id="passcodeSection" class="passcode-section hidden">
+    <div class="pc-card" data-aos>
+        <div class="pc-icon"><i class="fas fa-shield-halved"></i></div>
+        <div class="pc-title">ACCESS CODE</div>
+        <div id="passcodeMessage" class="pc-msg">Enter your 4-digit access code</div>
+        <div id="passcodeDots" class="pc-dots">
+            <div class="passcode-dot"></div>
+            <div class="passcode-dot"></div>
+            <div class="passcode-dot"></div>
+            <div class="passcode-dot"></div>
         </div>
-        <div class="header-actions">
-            <button class="header-btn" id="selectModeBtn" onclick="window.toggleSelectMode()">
-                <i class="fas fa-check-double"></i> <span>Select</span>
+        <div class="pc-pad">
+            <button class="pc-key" onclick="window.enterPasscode('1')">1</button>
+            <button class="pc-key" onclick="window.enterPasscode('2')">2</button>
+            <button class="pc-key" onclick="window.enterPasscode('3')">3</button>
+            <button class="pc-key" onclick="window.enterPasscode('4')">4</button>
+            <button class="pc-key" onclick="window.enterPasscode('5')">5</button>
+            <button class="pc-key" onclick="window.enterPasscode('6')">6</button>
+            <button class="pc-key" onclick="window.enterPasscode('7')">7</button>
+            <button class="pc-key" onclick="window.enterPasscode('8')">8</button>
+            <button class="pc-key" onclick="window.enterPasscode('9')">9</button>
+            <button class="pc-key pc-cancel" onclick="window.cancelPasscode()">✕</button>
+            <button class="pc-key" onclick="window.enterPasscode('0')">0</button>
+            <button class="pc-key pc-del" onclick="window.clearPasscode()">⌫</button>
+        </div>
+    </div>
+</div>
+
+<!-- ─────────────────────── MAIN APP ─────────────────────────── -->
+<div id="mainContent" class="main-content hidden">
+
+    <!-- Header -->
+    <header class="app-header" id="appHeader" data-aos>
+        <div class="hdr-left">
+            <div class="hdr-logo">
+                <div class="hdr-hex"><i class="fas fa-database"></i></div>
+                <div class="hdr-title-wrap">
+                    <span class="hdr-title">CSM DRIVE</span>
+                    <span class="hdr-ver">ULTRA PRO</span>
+                </div>
+            </div>
+        </div>
+        <div class="hdr-right">
+            <div id="syncStatusBadge" class="sync-badge" title="Sync Status">
+                <i class="fas fa-check-circle"></i> <span>SYNCED</span>
+            </div>
+            <button class="hdr-btn" id="themeToggleBtn" onclick="window.toggleTheme()" title="Theme">
+                <i class="fas fa-circle-half-stroke"></i>
             </button>
-            <button class="header-btn" onclick="window.showSettings()">
-                <i class="fas fa-gear"></i>
-            </button>
-            <button class="header-btn danger" onclick="window.confirmLogout()">
-                <i class="fas fa-right-from-bracket"></i> <span>Logout</span>
+            <button class="hdr-btn" onclick="window.confirmLogout()" title="Sign out">
+                <i class="fas fa-right-from-bracket"></i>
             </button>
         </div>
     </header>
 
-    <div class="container">
-        <!-- Storage -->
-        <div class="storage-info">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <div class="stat-icon" style="width:36px;height:36px;font-size:0.9rem;"><i class="fas fa-hard-drive"></i></div>
-                <div class="storage-label">Storage</div>
-            </div>
-            <div class="storage-bar-wrap">
-                <div class="storage-bar-bg"><div class="storage-bar-fill" id="storageFill" style="width:0%"></div></div>
-                <div class="storage-text" id="storageText">Calculating...</div>
+    <!-- Stats bar -->
+    <section class="stats-bar" data-aos data-aos-delay="80">
+        <div class="stat-card">
+            <div class="stat-icon"><i class="fas fa-image"></i></div>
+            <div class="stat-info"><span id="imgCount">0</span><span class="stat-label">Images</span></div>
+            <div class="stat-bar-wrap"><div class="stat-bar neon-bar" id="imgBar"></div></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon" style="color:var(--neon2)"><i class="fas fa-video"></i></div>
+            <div class="stat-info"><span id="vidCount">0</span><span class="stat-label">Videos</span></div>
+            <div class="stat-bar-wrap"><div class="stat-bar neon2-bar" id="vidBar"></div></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon" style="color:#ffd700"><i class="fas fa-star"></i></div>
+            <div class="stat-info"><span id="starCount">0</span><span class="stat-label">Starred</span></div>
+            <div class="stat-bar-wrap"><div class="stat-bar gold-bar" id="starBar"></div></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon" style="color:var(--danger)"><i class="fas fa-trash"></i></div>
+            <div class="stat-info"><span id="trashCount">0</span><span class="stat-label">Trashed</span></div>
+            <div class="stat-bar-wrap"><div class="stat-bar danger-bar" id="trashBar"></div></div>
+        </div>
+        <div class="stat-card storage-card">
+            <div class="stat-icon"><i class="fas fa-hard-drive"></i></div>
+            <div class="stat-info stat-storage">
+                <span id="storageText">0 MB / 1024 MB</span>
+                <div class="storage-bar-wrap"><div id="storageFill" class="storage-fill"></div></div>
             </div>
         </div>
+    </section>
 
-        <!-- Stats -->
-        <div class="stats-grid">
-            <div class="stat-box">
-                <div class="stat-icon"><i class="fas fa-layer-group"></i></div>
-                <div style="flex:1; min-width:0;">
-                    <div class="stat-val" id="countAll">0</div>
-                    <div class="stat-label">Total Files</div>
-                    <div class="stat-bar"><div class="stat-bar-fill" style="width:100%"></div></div>
-                </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-icon"><i class="fas fa-image"></i></div>
-                <div style="flex:1; min-width:0;">
-                    <div class="stat-val" id="countImg">0</div>
-                    <div class="stat-label">Photos</div>
-                    <div class="stat-bar"><div class="stat-bar-fill" id="imgBar" style="width:0%"></div></div>
-                </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-icon" style="color:var(--neon3); background:rgba(168,85,247,0.1);"><i class="fas fa-video"></i></div>
-                <div style="flex:1; min-width:0;">
-                    <div class="stat-val" id="countVid">0</div>
-                    <div class="stat-label">Videos</div>
-                    <div class="stat-bar"><div class="stat-bar-fill" id="vidBar" style="width:0%; background:linear-gradient(90deg, var(--neon3), #c084fc);"></div></div>
-                </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-icon" style="color:var(--warning); background:rgba(255,170,0,0.1);"><i class="fas fa-star"></i></div>
-                <div style="flex:1; min-width:0;">
-                    <div class="stat-val" id="countStar">0</div>
-                    <div class="stat-label">Starred</div>
-                    <div class="stat-bar"><div class="stat-bar-fill" id="starBar" style="width:0%; background:linear-gradient(90deg, var(--warning), #ffd700);"></div></div>
-                </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-icon" style="color:var(--danger); background:rgba(255,51,85,0.1);"><i class="fas fa-trash"></i></div>
-                <div style="flex:1; min-width:0;">
-                    <div class="stat-val" id="countTrash">0</div>
-                    <div class="stat-label">Trash</div>
-                    <div class="stat-bar"><div class="stat-bar-fill" id="trashBar" style="width:0%; background:linear-gradient(90deg, var(--danger), #ff6b6b);"></div></div>
-                </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-icon" style="color:var(--neon2); background:rgba(0,212,255,0.1);"><i class="fas fa-folder"></i></div>
-                <div style="flex:1; min-width:0;">
-                    <div class="stat-val" id="countFolders">0</div>
-                    <div class="stat-label">Folders</div>
-                    <div class="stat-bar"><div class="stat-bar-fill" id="folderBar" style="width:0%; background:linear-gradient(90deg, var(--neon2), #38bdf8);"></div></div>
-                </div>
-            </div>
-        </div>
+    <!-- Folder bar -->
+    <section class="folder-section" data-aos data-aos-delay="120">
+        <div class="folder-bar" id="folderBar"></div>
+    </section>
 
-        <!-- Toolbar -->
-        <div class="controls">
-            <div class="tabs">
-                <button class="tab-btn active" onclick="window.setTab('all', this)"><i class="fas fa-border-all"></i>&nbsp;All</button>
-                <button class="tab-btn" onclick="window.setTab('image', this)"><i class="fas fa-image"></i>&nbsp;Photos</button>
-                <button class="tab-btn" onclick="window.setTab('video', this)"><i class="fas fa-video"></i>&nbsp;Videos</button>
-                <button class="tab-btn" onclick="window.setTab('starred', this)" style="color:#ffd700"><i class="fas fa-star"></i>&nbsp;Starred</button>
-                <button class="tab-btn" onclick="window.setTab('locked', this)" style="color:var(--warning)"><i class="fas fa-lock"></i>&nbsp;Protected</button>
-                <button class="tab-btn" onclick="window.setTab('trash', this)" style="color:var(--danger)"><i class="fas fa-trash"></i>&nbsp;Trash</button>
+    <!-- Toolbar -->
+    <section class="toolbar" data-aos data-aos-delay="160">
+        <div class="toolbar-left">
+            <div class="search-wrap">
+                <i class="fas fa-magnifying-glass"></i>
+                <input type="text" id="searchInput" placeholder="Search files…" oninput="window.handleSearch()">
+                <button class="search-clear" id="searchClearBtn" onclick="window.clearSearch()" title="Clear">×</button>
             </div>
-            <div class="filters">
-                <div class="search-box">
-                    <i class="fas fa-search"></i>
-                    <input type="text" id="searchInput" placeholder="Search files..." onkeyup="window.handleSearch()">
-                </div>
-                <div class="sort-select-wrap">
-                    <select id="sortSelect" class="upload-select" onchange="window.handleSort()" style="font-size:0.75rem; padding:8px;">
-                        <option value="newest">Newest</option>
-                        <option value="oldest">Oldest</option>
-                        <option value="az">A-Z</option>
-                        <option value="za">Z-A</option>
-                        <option value="largest">Largest</option>
-                        <option value="smallest">Smallest</option>
-                    </select>
-                </div>
-                <div class="view-toggle">
-                    <button class="view-btn active" id="gridViewBtn" onclick="window.setView('grid')"><i class="fas fa-grid-2"></i></button>
-                    <button class="view-btn" id="listViewBtn" onclick="window.setView('list')"><i class="fas fa-list"></i></button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Folders -->
-        <div class="folder-bar" id="folderBar">
-            <div class="folder-pill active" onclick="window.setFolder('all', this)">
-                <i class="fas fa-folder"></i> All Files <span class="count" id="folderAllCount">0</span>
-            </div>
-        </div>
-
-        <!-- Trash Actions -->
-        <div id="trashActions" class="hidden" style="display:flex; gap:8px; margin-bottom:15px; flex-wrap:wrap;">
-            <button class="multi-btn" onclick="window.restoreAll()" style="border-color:rgba(0,255,204,0.2); color:var(--neon);">
-                <i class="fas fa-rotate-left"></i> <span>Restore All</span>
-            </button>
-            <button class="multi-btn danger" onclick="window.emptyTrash()" style="border-color:rgba(255,51,85,0.2); color:var(--danger);">
-                <i class="fas fa-fire"></i> <span>Empty Trash</span>
-            </button>
-            <span style="color:var(--text-muted); font-size:0.7rem; display:flex; align-items:center; gap:4px; margin-left:auto;">
-                <i class="fas fa-info-circle"></i> 30 day retention
-            </span>
-        </div>
-
-        <!-- File Grid -->
-        <div class="grid" id="fileGrid"></div>
-    </div>
-
-    <!-- Multi Select Bar -->
-    <div class="multi-bar" id="multiBar">
-        <div class="multi-count"><span id="selectCount">0</span> selected</div>
-        <div id="multiBarActions"></div>
-        <button class="multi-btn" onclick="window.selectAllVisible()" title="Select All"><i class="fas fa-check-double"></i> <span>All</span></button>
-        <button class="multi-btn" onclick="window.clearSelection()" style="color:#888;" title="Clear"><i class="fas fa-xmark"></i></button>
-    </div>
-
-    <!-- Upload FAB -->
-    <div class="fab-group">
-        <button class="fab" onclick="window.toggleUpload()"><i class="fas fa-plus"></i></button>
-    </div>
-
-    <!-- Upload Box -->
-    <div id="uploadBox">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-            <h3 style="color:white; font-family:'Orbitron',sans-serif; font-size:0.9rem; letter-spacing:1px;">Upload Files</h3>
-            <button onclick="document.getElementById('uploadBox').classList.remove('active')" style="background:none; border:none; color:#555; cursor:pointer; font-size:1.1rem; padding:5px;"><i class="fas fa-xmark"></i></button>
-        </div>
-        <div class="upload-form-row">
-            <input type="text" id="customName" class="input-glass input-glass-simple" placeholder="Custom Name (single file)" style="font-size:0.8rem; padding:10px 12px;">
-        </div>
-        <div class="upload-form-row">
-            <select id="uploadFolder" class="upload-select" style="flex:1; font-size:0.8rem;">
-                <option value="">No Folder</option>
+            <select id="sortSelect" class="sort-select" onchange="window.handleSort()">
+                <option value="newest">↓ Newest</option>
+                <option value="oldest">↑ Oldest</option>
+                <option value="az">A → Z</option>
+                <option value="za">Z → A</option>
+                <option value="largest">Largest</option>
+                <option value="smallest">Smallest</option>
             </select>
-            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--text-muted); font-size:0.75rem; white-space:nowrap;">
-                <input type="checkbox" id="uploadLocked"> <i class="fas fa-lock"></i> Protect
-            </label>
         </div>
-        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-            <div class="upload-icon"><i class="fas fa-cloud-arrow-up"></i></div>
-            <div class="upload-text">Drop files here or <span>browse</span></div>
-            <div class="upload-hint"><i class="fas fa-layer-group"></i> Select multiple files</div>
-            <input type="file" id="fileInput" hidden multiple accept="image/*,video/*">
-        </div>
-        <div id="selectedFilesPreview" class="hidden"></div>
-
-        <!-- Neon Progress Section -->
-        <div id="neonProgressSection" class="hidden neon-progress-container">
-            <div class="neon-progress-header">
-                <div>
-                    <div class="neon-progress-title" id="neonProgressTitle">UPLOADING</div>
-                    <div class="neon-progress-sub" id="neonProgressSub">Preparing files...</div>
-                </div>
-                <div class="neon-progress-pct" id="neonProgressPct">0%</div>
-            </div>
-            <div class="neon-progress-track">
-                <div class="neon-progress-fill" id="neonProgressFill"></div>
-            </div>
-            <div class="neon-progress-stats">
-                <span id="neonProgressFiles">0 / 0 files</span>
-                <span class="speed" id="neonProgressSpeed">-- MB/s</span>
-                <span id="neonProgressEta">ETA: --</span>
-            </div>
-        </div>
-
-        <div id="uploadQueue" style="margin-top:10px; max-height:180px; overflow-y:auto;"></div>
-        <div id="uploadStartBtnWrap" class="hidden" style="margin-top:10px;">
-            <button class="btn-neon" id="uploadStartBtn" onclick="window.startUpload()" style="font-family:'Inter'; font-size:0.82rem; padding:12px;">
-                <i class="fas fa-cloud-arrow-up"></i>&nbsp; Upload Files
+        <div class="toolbar-right">
+            <button id="gridViewBtn" class="view-btn active" onclick="window.setView('grid')" title="Grid"><i class="fas fa-grip"></i></button>
+            <button id="listViewBtn" class="view-btn" onclick="window.setView('list')" title="List"><i class="fas fa-list"></i></button>
+            <button class="upload-btn" onclick="window.toggleUploadPanel()" title="Upload">
+                <i class="fas fa-cloud-arrow-up"></i>
+                <span>Upload</span>
+                <span id="uploadQueueBadge" class="queue-badge hidden">0</span>
+            </button>
+            <button class="select-btn" id="selectModeBtn" onclick="window.toggleSelectMode()" title="Select">
+                <i class="fas fa-check-square"></i>
             </button>
         </div>
+    </section>
+
+    <!-- Tabs -->
+    <nav class="tabs" data-aos data-aos-delay="200">
+        <button class="tab-btn active" onclick="window.setTab('all', this)"><i class="fas fa-layer-group"></i> All</button>
+        <button class="tab-btn" onclick="window.setTab('image', this)"><i class="fas fa-image"></i> Images</button>
+        <button class="tab-btn" onclick="window.setTab('video', this)"><i class="fas fa-video"></i> Videos</button>
+        <button class="tab-btn" onclick="window.setTab('starred', this)"><i class="fas fa-star"></i> Starred</button>
+        <button class="tab-btn" onclick="window.setTab('locked', this)"><i class="fas fa-lock"></i> Locked</button>
+        <button class="tab-btn" onclick="window.setTab('trash', this)"><i class="fas fa-trash"></i> Trash</button>
+    </nav>
+
+    <!-- Trash actions -->
+    <div id="trashActions" class="trash-actions hidden">
+        <button class="trash-btn-restore" onclick="window.restoreAll()"><i class="fas fa-rotate-left"></i> Restore All</button>
+        <button class="trash-btn-purge" onclick="window.purgeTrash()"><i class="fas fa-fire"></i> Empty Trash</button>
     </div>
-</div>
 
-<!-- Context Menu -->
-<div class="context-menu" id="contextMenu"></div>
-
-<!-- Info Panel -->
-<div class="info-panel" id="infoPanel">
-    <div class="info-panel-header">
-        <h3 style="font-family:'Orbitron',sans-serif; font-size:0.95rem; color:white;">File Details</h3>
-        <button onclick="window.closeInfoPanel()" style="background:none; border:none; color:#555; cursor:pointer; font-size:1.2rem; padding:5px;"><i class="fas fa-xmark"></i></button>
+    <!-- Multi select bar -->
+    <div id="multiBar" class="multi-bar hidden">
+        <div class="multi-count"><span id="selectedCount">0</span> selected</div>
+        <div id="multiBarActions" class="multi-actions"></div>
+        <button class="multi-close" onclick="window.toggleSelectMode()"><i class="fas fa-xmark"></i></button>
     </div>
-    <div class="info-preview" id="infoPanelPreview"></div>
-    <div id="infoPanelContent"></div>
-</div>
 
-<!-- Modals Container -->
-<div id="modalContainer"></div>
+    <!-- Upload panel -->
+    <div id="uploadPanel" class="upload-panel hidden">
+        <div class="up-inner">
+            <div id="dropZone" class="drop-zone" ondrop="window.handleDrop(event)" ondragover="event.preventDefault()" ondragenter="this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')">
+                <div class="dz-icon"><i class="fas fa-cloud-arrow-up"></i></div>
+                <div class="dz-text">Drop files here or</div>
+                <label class="dz-btn">
+                    <i class="fas fa-folder-open"></i> Browse Files
+                    <input type="file" id="fileInput" multiple accept="image/*,video/*" onchange="window.handleFileSelect(event)">
+                </label>
+                <div class="dz-hint">Images & Videos · Max 50MB each</div>
+            </div>
+            <div id="stagedFiles" class="staged-files"></div>
+            <div class="up-meta">
+                <input type="text" id="uploadName" placeholder="Custom name (optional)">
+                <select id="uploadFolder"><option value="">No Folder</option></select>
+            </div>
+            <div id="uploadProgress" class="upload-progress hidden">
+                <div class="up-progress-label">
+                    <span id="upFileName">Uploading…</span>
+                    <span id="upPercent">0%</span>
+                </div>
+                <div class="up-bar-wrap"><div id="upBar" class="up-bar"></div></div>
+            </div>
+            <div class="up-actions">
+                <button class="up-cancel" onclick="window.toggleUploadPanel()">Cancel</button>
+                <button class="up-submit" id="uploadBtn" onclick="window.startUpload()">
+                    <i class="fas fa-rocket"></i> Upload
+                </button>
+            </div>
+        </div>
+    </div>
 
-<!-- NexusLightbox — custom zero-dependency futuristic lightbox (replaces Fancybox) -->
+    <!-- File grid -->
+    <main id="fileGrid" class="grid"></main>
+
+    <!-- Context menu -->
+    <div id="contextMenu" class="context-menu hidden"></div>
+
+    <!-- Modal overlay -->
+    <div id="modalOverlay" class="modal-overlay hidden">
+        <div class="modal-box" id="modalBox"></div>
+    </div>
+
+    <!-- App footer / developer credit -->
+    <footer class="app-footer" data-aos>
+        <div class="footer-inner">
+            <div class="footer-logo">
+                <i class="fas fa-database"></i> CSM DRIVE ULTRA PRO
+            </div>
+            <div class="footer-dev">
+                Crafted by <span class="footer-dev-name">Csm Mohasin Alam</span>
+            </div>
+            <div class="footer-links">
+                <span class="footer-link"><i class="fas fa-shield-halved"></i> Secure</span>
+                <span class="footer-link"><i class="fas fa-wifi"></i> Offline-Ready</span>
+                <span class="footer-link"><i class="fas fa-cloud"></i> Firebase</span>
+                <span class="footer-link"><i class="fas fa-image"></i> Cloudinary</span>
+            </div>
+        </div>
+    </footer>
+
+</div><!-- /mainContent -->
+
+<!-- NexusLightbox (zero CDN deps) -->
 <script src="lightbox.js"></script>
 
-<!-- App Script (ES module for Firebase imports) -->
+<!-- App script (ES module for Firebase) -->
 <script type="module" src="script.js"></script>
 
-<!-- Service Worker Registration -->
+<!-- SW Registration -->
 <script>
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js')
-                .then(reg => {
-                    console.log('[SW] Registered:', reg.scope);
-                    // If there is a waiting SW, tell it to activate immediately
-                    if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-                    reg.addEventListener('updatefound', () => {
-                        const newSW = reg.installing;
-                        if (newSW) {
-                            newSW.addEventListener('statechange', () => {
-                                if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
-                                    console.log('[SW] New version available');
-                                }
-                            });
-                        }
-                    });
-                })
-                .catch(err => console.warn('[SW] Registration failed:', err));
-        });
-    }
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then(r => console.log('[SW] Registered', r.scope))
+            .catch(e => console.warn('[SW] Failed', e));
+    });
+}
 </script>
+
 </body>
 </html>
