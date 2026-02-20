@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRACKR — Admin Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Exo+2:wght@300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  :root {
+    --neon: #00f5ff;
+    --red: #ff2244;
+    --green: #00ff88;
+    --yellow: #ffd700;
+    --bg: #030810;
+    --sidebar: #060f1e;
+    --card: #0a1628;
+    --border: #0d2845;
+    --text: #c0d8f0;
+    --glow: 0 0 20px rgba(0,245,255,0.4);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Exo 2', sans-serif;
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* SIDEBAR */
+  .sidebar {
+    width: 320px;
+    min-width: 320px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    z-index: 100;
+  }
+
+  .sidebar-header {
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(135deg, #030810, #060f1e);
+  }
+  .sidebar-header h1 {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.3rem;
+    color: var(--neon);
+    text-shadow: var(--glow);
+    letter-spacing: 3px;
+  }
+  .sidebar-header p { font-size: 0.7rem; color: #4a7a9b; letter-spacing: 2px; margin-top: 3px; }
+
+  .live-count {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 12px;
+    font-size: 0.78rem;
+  }
+  .count-badge {
+    background: rgba(0,245,255,0.1);
+    border: 1px solid rgba(0,245,255,0.3);
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-family: 'Orbitron', monospace;
+    color: var(--neon);
+    font-size: 0.8rem;
+  }
+
+  .sidebar-tools {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .tool-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: rgba(0,245,255,0.05);
+    color: var(--text);
+    font-family: 'Exo 2', sans-serif;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 1px;
+  }
+  .tool-btn:hover { border-color: var(--neon); color: var(--neon); background: rgba(0,245,255,0.1); }
+  .tool-btn.active { border-color: var(--neon); background: rgba(0,245,255,0.15); color: var(--neon); }
+  .tool-btn.danger { border-color: rgba(255,34,68,0.4); color: #ff6680; }
+  .tool-btn.danger:hover { border-color: var(--red); background: rgba(255,34,68,0.1); color: var(--red); }
+
+  .user-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
+  .user-list::-webkit-scrollbar { width: 4px; }
+  .user-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .user-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .user-card:hover { border-color: rgba(0,245,255,0.4); transform: translateX(3px); }
+  .user-card.selected { border-color: var(--neon); background: rgba(0,245,255,0.06); }
+  .user-card.sos-active {
+    border-color: var(--red) !important;
+    animation: sosCardBlink 0.5s infinite;
+  }
+  @keyframes sosCardBlink {
+    50% { background: rgba(255,34,68,0.1); }
+  }
+  .user-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .user-name { font-weight: 600; font-size: 0.9rem; color: white; }
+  .user-status {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #ff4444;
+  }
+  .user-status.online { background: var(--green); box-shadow: 0 0 6px var(--green); animation: blink 1.5s infinite; }
+  @keyframes blink { 50% { opacity: 0.4; } }
+  .user-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 0.7rem; color: #4a7a9b; }
+  .user-meta span { display: flex; align-items: center; gap: 4px; }
+  .user-meta .val { color: #7ab0cc; }
+  .sos-badge {
+    display: none;
+    position: absolute; top: 8px; right: 30px;
+    background: var(--red);
+    color: white;
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 1px;
+    animation: sosBadge 0.5s infinite;
+  }
+  @keyframes sosBadge { 50% { opacity: 0.3; } }
+  .sos-active .sos-badge { display: block; }
+
+  .no-users {
+    text-align: center;
+    padding: 40px 20px;
+    color: #2a4a6a;
+    font-size: 0.82rem;
+  }
+  .no-users .icon { font-size: 2rem; margin-bottom: 10px; opacity: 0.3; }
+
+  /* MAIN MAP AREA */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+
+  .topbar {
+    height: 48px;
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 16px;
+    gap: 16px;
+    font-size: 0.75rem;
+    color: #4a7a9b;
+    z-index: 10;
+    position: relative;
+  }
+  .topbar-item { display: flex; align-items: center; gap: 6px; }
+  .topbar-item strong { color: var(--neon); font-family: 'Orbitron', monospace; font-size: 0.72rem; }
+
+  #map {
+    flex: 1;
+    position: relative;
+  }
+
+  /* LEAFLET DARK THEME OVERRIDE */
+  .leaflet-container { background: #030810 !important; }
+  .leaflet-tile { filter: brightness(0.6) saturate(0.4) hue-rotate(180deg); }
+
+  /* INFO PANEL */
+  .info-panel {
+    position: absolute;
+    top: 16px; right: 16px;
+    width: 280px;
+    background: rgba(6,15,30,0.95);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    z-index: 1000;
+    display: none;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,245,255,0.1);
+  }
+  .info-panel.show { display: block; }
+  .info-panel h3 {
+    font-family: 'Orbitron', monospace;
+    font-size: 0.9rem;
+    color: var(--neon);
+    margin-bottom: 14px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .info-panel .close-btn {
+    cursor: pointer; color: #4a7a9b; font-size: 1rem;
+    background: none; border: none; color: #4a7a9b;
+  }
+  .info-panel .close-btn:hover { color: white; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .info-item { background: rgba(0,245,255,0.04); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+  .info-item .il { font-size: 0.6rem; letter-spacing: 1.5px; text-transform: uppercase; color: #3a6a8a; margin-bottom: 4px; }
+  .info-item .iv { font-family: 'Orbitron', monospace; font-size: 0.8rem; color: var(--neon); font-weight: 600; }
+  .info-item.full { grid-column: span 2; }
+  .street-view-link {
+    display: block;
+    margin-top: 10px;
+    text-align: center;
+    padding: 8px;
+    background: rgba(0,245,255,0.08);
+    border: 1px solid rgba(0,245,255,0.2);
+    border-radius: 6px;
+    color: var(--neon);
+    text-decoration: none;
+    font-size: 0.75rem;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+  .street-view-link:hover { background: rgba(0,245,255,0.15); }
+
+  /* GEOFENCE CONTROLS */
+  .geofence-controls {
+    position: absolute;
+    bottom: 20px; left: 16px;
+    background: rgba(6,15,30,0.95);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    z-index: 1000;
+    backdrop-filter: blur(10px);
+    font-size: 0.75rem;
+  }
+  .geofence-controls h4 { color: var(--neon); font-family: 'Orbitron', monospace; font-size: 0.7rem; letter-spacing: 2px; margin-bottom: 10px; }
+  .geo-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .geo-row label { color: #4a7a9b; width: 60px; }
+  .geo-input {
+    background: rgba(0,245,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    width: 80px;
+    font-family: 'Exo 2', sans-serif;
+  }
+  .geo-input:focus { outline: none; border-color: rgba(0,245,255,0.4); }
+
+  /* SOS ALARM OVERLAY */
+  .sos-alarm {
+    display: none;
+    position: fixed; inset: 0; z-index: 9999;
+    pointer-events: none;
+    border: 4px solid var(--red);
+    animation: sosAlarm 0.5s infinite;
+  }
+  @keyframes sosAlarm {
+    0%, 100% { border-color: var(--red); box-shadow: inset 0 0 50px rgba(255,34,68,0.2); }
+    50% { border-color: #ff6644; box-shadow: inset 0 0 100px rgba(255,34,68,0.4); }
+  }
+  .sos-alarm.show { display: block; }
+
+  .sos-toast {
+    display: none;
+    position: fixed;
+    top: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--red);
+    color: white;
+    padding: 12px 32px;
+    border-radius: 8px;
+    font-family: 'Orbitron', monospace;
+    font-size: 0.9rem;
+    letter-spacing: 2px;
+    z-index: 10000;
+    animation: toastPulse 0.5s infinite;
+  }
+  @keyframes toastPulse { 50% { opacity: 0.6; } }
+  .sos-toast.show { display: block; }
+
+  /* Geofence alarm */
+  .geo-toast {
+    display: none;
+    position: fixed;
+    top: 70px; left: 50%; transform: translateX(-50%);
+    background: #ff8800;
+    color: white;
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    z-index: 10000;
+  }
+  .geo-toast.show { display: block; animation: toastPulse 1s infinite; }
+</style>
+</head>
+<body>
+
+<!-- SOS Overlays -->
+<div class="sos-alarm" id="sosAlarm"></div>
+<div class="sos-toast" id="sosToast">🚨 SOS ALERT!</div>
+<div class="geo-toast" id="geoToast">⚠ GEOFENCE BREACH!</div>
+
+<!-- SIDEBAR -->
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>⬡ TRACKR</h1>
+    <p>ADMIN COMMAND CENTER</p>
+    <div class="live-count">
+      <div style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 1s infinite"></div>
+      <span style="font-size:0.7rem;color:#4a7a9b">LIVE USERS:</span>
+      <span class="count-badge" id="liveCount">0</span>
+    </div>
+  </div>
+
+  <div class="sidebar-tools">
+    <button class="tool-btn active" onclick="togglePaths(this)">📍 Paths</button>
+    <button class="tool-btn" onclick="toggleGeofence(this)">⬤ Geofence</button>
+    <button class="tool-btn" onclick="fitAll()">🗺 Fit All</button>
+    <button class="tool-btn danger" onclick="clearSOS()">✕ Clear SOS</button>
+  </div>
+
+  <div class="user-list" id="userList">
+    <div class="no-users">
+      <div class="icon">📡</div>
+      Waiting for users to connect...
+    </div>
+  </div>
+</div>
+
+<!-- MAP AREA -->
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-item">⏱ <strong id="clockEl">--:--:--</strong></div>
+    <div class="topbar-item">🛰 TRACKING: <strong id="trackCount">0</strong> ACTIVE</div>
+    <div class="topbar-item" id="geofenceStatus" style="color:#ff8800;display:none">⚠ GEOFENCE ON</div>
+    <div style="flex:1"></div>
+    <div class="topbar-item" style="font-size:0.65rem;color:#2a4a6a">REALTIME DB CONNECTED</div>
+  </div>
+  <div id="map"></div>
+
+  <!-- INFO PANEL -->
+  <div class="info-panel" id="infoPanel">
+    <h3>USER INFO <button class="close-btn" onclick="closeInfo()">✕</button></h3>
+    <div class="info-grid" id="infoGrid"></div>
+    <a class="street-view-link" id="streetViewLink" href="#" target="_blank">🗺 Open Street View</a>
+  </div>
+
+  <!-- GEOFENCE CONTROLS -->
+  <div class="geofence-controls" id="geoControls" style="display:none">
+    <h4>⬤ GEOFENCE SETTINGS</h4>
+    <div class="geo-row">
+      <label>Lat:</label>
+      <input class="geo-input" id="geoLat" placeholder="23.8041" value="23.8041">
+    </div>
+    <div class="geo-row">
+      <label>Lng:</label>
+      <input class="geo-input" id="geoLng" placeholder="90.4152" value="90.4152">
+    </div>
+    <div class="geo-row">
+      <label>Radius:</label>
+      <input class="geo-input" id="geoRadius" placeholder="500" value="500">
+      <span style="color:#4a7a9b;font-size:0.65rem">m</span>
+    </div>
+    <button class="tool-btn" style="width:100%;margin-top:4px" onclick="applyGeofence()">Apply Geofence</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDMtnUi5BScy_E_IhgawOYh72vgOfu-3Dw",
+  authDomain: "location-f2550.firebaseapp.com",
+  databaseURL: "https://location-f2550-default-rtdb.firebaseio.com",
+  projectId: "location-f2550",
+  storageBucket: "location-f2550.firebasestorage.app",
+  messagingSenderId: "826880833493",
+  appId: "1:826880833493:web:0cc4e603b4315ba9712f5c"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// MAP INIT
+const map = L.map('map', {
+  zoomControl: true,
+  attributionControl: false
+}).setView([23.8041, 90.4152], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+// Dark overlay
+L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', {
+  maxZoom: 20,
+  attribution: '© Stadia Maps'
+}).addTo(map);
+
+// State
+const markers = {};
+const polylines = {};
+const userData = {};
+let showPaths = true;
+let geofenceCircle = null;
+let geofenceActive = false;
+let geofenceSettings = { lat: 23.8041, lng: 90.4152, radius: 500 };
+let sosAudioCtx = null;
+const geoBreachers = new Set();
+
+// Custom marker icon
+const createMarkerIcon = (color, blinking = false) => {
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width:16px;height:16px;
+      border-radius:50%;
+      background:${color};
+      border:2px solid white;
+      box-shadow:0 0 10px ${color};
+      ${blinking ? 'animation:markerBlink 0.5s infinite;' : ''}
+    "></div>
+    <style>@keyframes markerBlink{50%{opacity:0.2;transform:scale(1.5);}}</style>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+    popupAnchor: [0, -10]
+  });
+};
+
+// SOS Audio
+const playSOSAlarm = () => {
+  if (!sosAudioCtx) sosAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = sosAudioCtx.createOscillator();
+  const gain = sosAudioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(sosAudioCtx.destination);
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(880, sosAudioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(220, sosAudioCtx.currentTime + 0.5);
+  gain.gain.setValueAtTime(0.3, sosAudioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, sosAudioCtx.currentTime + 0.5);
+  osc.start();
+  osc.stop(sosAudioCtx.currentTime + 0.5);
+};
+
+const playGeoAlarm = () => {
+  if (!sosAudioCtx) sosAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = sosAudioCtx.createOscillator();
+  const gain = sosAudioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(sosAudioCtx.destination);
+  osc.type = 'square';
+  osc.frequency.value = 440;
+  gain.gain.setValueAtTime(0.2, sosAudioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, sosAudioCtx.currentTime + 0.3);
+  osc.start();
+  osc.stop(sosAudioCtx.currentTime + 0.3);
+};
+
+// Geofence check
+const checkGeofence = (uid, lat, lng) => {
+  if (!geofenceActive) return;
+  const d = map.distance([lat, lng], [geofenceSettings.lat, geofenceSettings.lng]);
+  const wasOutside = geoBreachers.has(uid);
+  if (d > geofenceSettings.radius && !wasOutside) {
+    geoBreachers.add(uid);
+    showGeoToast(userData[uid]?.name || uid);
+    playGeoAlarm();
+    setTimeout(playGeoAlarm, 400);
+  } else if (d <= geofenceSettings.radius && wasOutside) {
+    geoBreachers.delete(uid);
+  }
+};
+
+const showGeoToast = (name) => {
+  const t = document.getElementById('geoToast');
+  t.textContent = `⚠ GEOFENCE BREACH: ${name}`;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 5000);
+};
+
+// Update user on map
+const updateUser = (uid, data) => {
+  const { lat, lng, name = 'Unknown', speed = 0, motion = '', battery = {}, network = '', ip = '', isp = '', device = '', sos = false, online = false, path = [], timestamp, lightLevel } = data;
+  userData[uid] = data;
+
+  const isSOS = sos === true;
+  const color = isSOS ? '#ff2244' : (online ? '#00f5ff' : '#ff6644');
+
+  // Update or create marker
+  if (markers[uid]) {
+    markers[uid].setLatLng([lat, lng]);
+    markers[uid].setIcon(createMarkerIcon(color, isSOS));
+  } else {
+    markers[uid] = L.marker([lat, lng], { icon: createMarkerIcon(color, isSOS) }).addTo(map);
+    markers[uid].on('click', () => showUserInfo(uid));
+  }
+
+  if (isSOS) {
+    markers[uid].setIcon(createMarkerIcon(color, true));
+  }
+
+  // Update path polyline
+  if (showPaths && path && path.length > 1) {
+    const latLngs = path.map(p => [p[0], p[1]]);
+    if (polylines[uid]) {
+      polylines[uid].setLatLngs(latLngs);
+    } else {
+      polylines[uid] = L.polyline(latLngs, {
+        color: isSOS ? '#ff2244' : '#00f5ff',
+        weight: 2,
+        opacity: 0.7,
+        dashArray: isSOS ? null : '5,5'
+      }).addTo(map);
+    }
+  }
+
+  // Check geofence
+  checkGeofence(uid, lat, lng);
+
+  // Update sidebar card
+  updateSidebar(uid, data);
+};
+
+// Sidebar card update
+const updateSidebar = (uid, data) => {
+  const { name = 'User', speed = 0, motion = '', battery = {}, online = false, sos = false, lastSeen } = data;
+  let card = document.getElementById(`card_${uid}`);
+  const noUsers = document.querySelector('.no-users');
+  if (noUsers) noUsers.remove();
+
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'user-card';
+    card.id = `card_${uid}`;
+    card.onclick = () => { focusUser(uid); showUserInfo(uid); };
+    document.getElementById('userList').appendChild(card);
+  }
+
+  card.className = 'user-card' + (sos ? ' sos-active' : '');
+  card.innerHTML = `
+    <span class="sos-badge">SOS</span>
+    <div class="user-card-header">
+      <span class="user-name">${name}</span>
+      <span class="user-status ${online ? 'online' : ''}"></span>
+    </div>
+    <div class="user-meta">
+      <span>🏃 <span class="val">${motion || 'Unknown'}</span></span>
+      <span>⚡ <span class="val">${speed} km/h</span></span>
+      <span>🔋 <span class="val">${battery?.level ?? '--'}%${battery?.charging ? ' ⚡' : ''}</span></span>
+      <span>📶 <span class="val">${data.network || '--'}</span></span>
+    </div>
+    ${!online && lastSeen ? `<div style="font-size:0.65rem;color:#3a5a7a;margin-top:6px">Last seen: ${new Date(lastSeen).toLocaleTimeString()}</div>` : ''}
+  `;
+
+  // Update counts
+  const allCards = document.querySelectorAll('.user-card');
+  const onlineCount = [...allCards].filter(c => userData[c.id.replace('card_', '')]?.online).length;
+  document.getElementById('liveCount').textContent = allCards.length;
+  document.getElementById('trackCount').textContent = onlineCount;
+};
+
+// Show info panel
+const showUserInfo = (uid) => {
+  const d = userData[uid];
+  if (!d) return;
+  const panel = document.getElementById('infoPanel');
+  const grid = document.getElementById('infoGrid');
+
+  grid.innerHTML = `
+    <div class="info-item"><div class="il">Name</div><div class="iv">${d.name || 'Unknown'}</div></div>
+    <div class="info-item"><div class="il">Status</div><div class="iv" style="color:${d.online?'#00ff88':'#ff4444'}">${d.online?'ONLINE':'OFFLINE'}</div></div>
+    <div class="info-item"><div class="il">Speed</div><div class="iv">${d.speed || 0} km/h</div></div>
+    <div class="info-item"><div class="il">Motion</div><div class="iv" style="font-size:0.72rem">${d.motion || '--'}</div></div>
+    <div class="info-item"><div class="il">Battery</div><div class="iv">${d.battery?.level ?? '--'}%${d.battery?.charging?' ⚡':''}</div></div>
+    <div class="info-item"><div class="il">Network</div><div class="iv">${d.network || '--'}</div></div>
+    <div class="info-item full"><div class="il">IP Address</div><div class="iv" style="font-size:0.75rem">${d.ip || '--'}</div></div>
+    <div class="info-item full"><div class="il">ISP</div><div class="iv" style="font-size:0.7rem;word-break:break-word">${d.isp || '--'}</div></div>
+    <div class="info-item full"><div class="il">Device</div><div class="iv" style="font-size:0.72rem">${d.device || '--'}</div></div>
+    <div class="info-item"><div class="il">Latitude</div><div class="iv" style="font-size:0.75rem">${(d.lat||0).toFixed(5)}</div></div>
+    <div class="info-item"><div class="il">Longitude</div><div class="iv" style="font-size:0.75rem">${(d.lng||0).toFixed(5)}</div></div>
+    ${d.lightLevel !== null && d.lightLevel !== undefined ? `<div class="info-item full"><div class="il">Ambient Light</div><div class="iv">${Math.round(d.lightLevel)} lux</div></div>` : ''}
+  `;
+
+  document.getElementById('streetViewLink').href = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${d.lat},${d.lng}`;
+  panel.classList.add('show');
+
+  // Select card
+  document.querySelectorAll('.user-card').forEach(c => c.classList.remove('selected'));
+  const card = document.getElementById(`card_${uid}`);
+  if (card) card.classList.add('selected');
+};
+
+window.closeInfo = () => document.getElementById('infoPanel').classList.remove('show');
+
+const focusUser = (uid) => {
+  const d = userData[uid];
+  if (d) map.setView([d.lat, d.lng], 16);
+};
+
+// SOS listener
+const handleSOS = (uid, active) => {
+  if (active) {
+    document.getElementById('sosAlarm').classList.add('show');
+    document.getElementById('sosToast').textContent = `🚨 SOS: ${userData[uid]?.name || uid}`;
+    document.getElementById('sosToast').classList.add('show');
+    playSOSAlarm();
+    setTimeout(playSOSAlarm, 600);
+    setTimeout(playSOSAlarm, 1200);
+    if (markers[uid]) markers[uid].setIcon(createMarkerIcon('#ff2244', true));
+  }
+};
+
+// Firebase listeners
+onValue(ref(db, 'users'), (snapshot) => {
+  const all = snapshot.val() || {};
+  Object.entries(all).forEach(([uid, data]) => {
+    const wasOnline = userData[uid]?.online;
+    updateUser(uid, data);
+    if (data.sos && !userData[uid]?.lastSosHandled) {
+      handleSOS(uid, true);
+      userData[uid].lastSosHandled = true;
+    } else if (!data.sos) {
+      delete userData[uid]?.lastSosHandled;
+    }
+  });
+});
+
+// Geofence
+window.toggleGeofence = (btn) => {
+  const controls = document.getElementById('geoControls');
+  const status = document.getElementById('geofenceStatus');
+  if (controls.style.display === 'none') {
+    controls.style.display = 'block';
+    btn.classList.add('active');
+  } else {
+    controls.style.display = 'none';
+    btn.classList.remove('active');
+    if (geofenceCircle) { map.removeLayer(geofenceCircle); geofenceCircle = null; }
+    geofenceActive = false;
+    status.style.display = 'none';
+    geoBreachers.clear();
+  }
+};
+
+window.applyGeofence = () => {
+  const lat = parseFloat(document.getElementById('geoLat').value);
+  const lng = parseFloat(document.getElementById('geoLng').value);
+  const radius = parseFloat(document.getElementById('geoRadius').value);
+  if (isNaN(lat) || isNaN(lng) || isNaN(radius)) return;
+
+  geofenceSettings = { lat, lng, radius };
+  geofenceActive = true;
+  geoBreachers.clear();
+
+  if (geofenceCircle) map.removeLayer(geofenceCircle);
+  geofenceCircle = L.circle([lat, lng], {
+    radius,
+    color: '#ffd700',
+    fillColor: '#ffd700',
+    fillOpacity: 0.05,
+    weight: 2,
+    dashArray: '8,4'
+  }).addTo(map);
+
+  map.setView([lat, lng], 14);
+  document.getElementById('geofenceStatus').style.display = 'flex';
+};
+
+window.togglePaths = (btn) => {
+  showPaths = !showPaths;
+  btn.classList.toggle('active', showPaths);
+  Object.values(polylines).forEach(p => showPaths ? p.addTo(map) : map.removeLayer(p));
+};
+
+window.fitAll = () => {
+  const pts = Object.values(userData).filter(d => d.lat).map(d => [d.lat, d.lng]);
+  if (pts.length) map.fitBounds(pts, { padding: [50, 50] });
+};
+
+window.clearSOS = async () => {
+  document.getElementById('sosAlarm').classList.remove('show');
+  document.getElementById('sosToast').classList.remove('show');
+  // Reset all SOS in DB
+  Object.keys(userData).forEach(async uid => {
+    if (userData[uid]?.sos) {
+      await set(ref(db, `users/${uid}/sos`), false);
+    }
+  });
+  Object.values(markers).forEach(m => m.setIcon(createMarkerIcon('#00f5ff', false)));
+};
+
+// Clock
+setInterval(() => {
+  document.getElementById('clockEl').textContent = new Date().toLocaleTimeString();
+}, 1000);
+</script>
+</body>
+</html>

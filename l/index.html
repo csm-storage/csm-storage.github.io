@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPS Tracker — User</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Exo+2:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --neon: #00f5ff;
+    --red: #ff2244;
+    --bg: #030810;
+    --card: #0a1628;
+    --border: #0d2845;
+    --text: #c0d8f0;
+    --glow: 0 0 20px rgba(0,245,255,0.4);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Exo 2', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .grid-bg {
+    position: fixed; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(0,245,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,245,255,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    animation: gridMove 20s linear infinite;
+  }
+  @keyframes gridMove { from { background-position: 0 0; } to { background-position: 40px 40px; } }
+
+  .container {
+    position: relative; z-index: 1;
+    width: 90%; max-width: 480px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    box-shadow: 0 0 60px rgba(0,245,255,0.08), inset 0 1px 0 rgba(0,245,255,0.1);
+  }
+  .logo {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .logo h1 {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.8rem;
+    font-weight: 900;
+    color: var(--neon);
+    text-shadow: var(--glow);
+    letter-spacing: 3px;
+  }
+  .logo p { font-size: 0.8rem; color: #4a7a9b; letter-spacing: 4px; text-transform: uppercase; margin-top: 4px; }
+
+  .pulse-ring {
+    width: 100px; height: 100px;
+    margin: 0 auto 28px;
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pulse-ring::before, .pulse-ring::after {
+    content: '';
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    border: 2px solid var(--neon);
+    animation: pulseRing 2s ease-out infinite;
+  }
+  .pulse-ring::after { animation-delay: 1s; }
+  @keyframes pulseRing {
+    0% { transform: scale(0.6); opacity: 1; }
+    100% { transform: scale(1.4); opacity: 0; }
+  }
+  .pulse-ring svg { width: 40px; height: 40px; fill: var(--neon); filter: drop-shadow(var(--glow)); position: relative; z-index: 1; }
+
+  .status-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 12px; margin-bottom: 24px;
+  }
+  .stat {
+    background: rgba(0,245,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    transition: border-color 0.3s;
+  }
+  .stat:hover { border-color: rgba(0,245,255,0.3); }
+  .stat-label { font-size: 0.65rem; letter-spacing: 2px; text-transform: uppercase; color: #4a7a9b; margin-bottom: 6px; }
+  .stat-value { font-family: 'Orbitron', monospace; font-size: 1rem; color: var(--neon); font-weight: 700; }
+  .stat-value.offline { color: #ff6644; }
+
+  .status-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px;
+    background: rgba(0,245,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 24px;
+    font-size: 0.82rem;
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #444; transition: background 0.3s;
+  }
+  .dot.active { background: #00ff88; box-shadow: 0 0 8px #00ff88; animation: blink 1s infinite; }
+  .dot.error { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  @keyframes blink { 50% { opacity: 0.3; } }
+
+  #statusText { color: var(--text); flex: 1; }
+
+  .sos-btn {
+    width: 100%;
+    padding: 18px;
+    background: linear-gradient(135deg, #ff0022, #cc0011);
+    border: 2px solid #ff2244;
+    border-radius: 12px;
+    color: white;
+    font-family: 'Orbitron', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 0 30px rgba(255,34,68,0.4);
+    position: relative;
+    overflow: hidden;
+  }
+  .sos-btn:hover { transform: translateY(-2px); box-shadow: 0 0 50px rgba(255,34,68,0.7); }
+  .sos-btn:active { transform: scale(0.97); }
+  .sos-btn.triggered {
+    animation: sosPulse 0.5s infinite;
+  }
+  @keyframes sosPulse {
+    0%, 100% { box-shadow: 0 0 30px rgba(255,34,68,0.4); }
+    50% { box-shadow: 0 0 80px rgba(255,34,68,1); background: #ff0000; }
+  }
+  .sos-btn::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%);
+    transform: translateX(-100%);
+    transition: transform 0.5s;
+  }
+  .sos-btn:hover::before { transform: translateX(100%); }
+
+  .log {
+    margin-top: 20px;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 0.72rem;
+    font-family: monospace;
+    color: #3a6a8a;
+    line-height: 1.8;
+  }
+  .log::-webkit-scrollbar { width: 4px; }
+  .log::-webkit-scrollbar-track { background: transparent; }
+  .log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry { border-bottom: 1px solid rgba(0,245,255,0.05); padding: 2px 0; }
+  .log-entry.info { color: #00f5ff66; }
+  .log-entry.success { color: #00ff8866; }
+  .log-entry.error { color: #ff224466; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="container">
+  <div class="logo">
+    <h1>⬡ TRACKR</h1>
+    <p>Real-time Location System</p>
+  </div>
+
+  <div class="pulse-ring">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+    </svg>
+  </div>
+
+  <div class="status-grid">
+    <div class="stat">
+      <div class="stat-label">Speed</div>
+      <div class="stat-value" id="speedVal">-- km/h</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Status</div>
+      <div class="stat-value" id="motionVal">--</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Battery</div>
+      <div class="stat-value" id="battVal">--%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Network</div>
+      <div class="stat-value" id="netVal">--</div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Initializing system...</span>
+  </div>
+
+  <button class="sos-btn" id="sosBtn" onclick="triggerSOS()">
+    🚨 SOS EMERGENCY
+  </button>
+
+  <div class="log" id="logContainer"></div>
+</div>
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, set, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDMtnUi5BScy_E_IhgawOYh72vgOfu-3Dw",
+  authDomain: "location-f2550.firebaseapp.com",
+  databaseURL: "https://location-f2550-default-rtdb.firebaseio.com",
+  projectId: "location-f2550",
+  storageBucket: "location-f2550.firebasestorage.app",
+  messagingSenderId: "826880833493",
+  appId: "1:826880833493:web:0cc4e603b4315ba9712f5c"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// Generate or retrieve user ID
+let userId = localStorage.getItem('trackr_uid');
+if (!userId) {
+  userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+  localStorage.setItem('trackr_uid', userId);
+}
+
+const userRef = ref(db, `users/${userId}`);
+const log = (msg, type = 'info') => {
+  const el = document.createElement('div');
+  el.className = `log-entry ${type}`;
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  const c = document.getElementById('logContainer');
+  c.prepend(el);
+  if (c.children.length > 20) c.removeChild(c.lastChild);
+};
+
+const setStatus = (msg, state = '') => {
+  document.getElementById('statusText').textContent = msg;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'dot' + (state ? ' ' + state : '');
+};
+
+// Device info
+const getDeviceInfo = () => {
+  const ua = navigator.userAgent;
+  let model = 'Unknown Device';
+  if (/iPhone/.test(ua)) model = 'iPhone';
+  else if (/Android/.test(ua)) {
+    const m = ua.match(/\(([^;]+);/);
+    if (m) model = m[1].trim();
+  } else if (/Windows/.test(ua)) model = 'Windows PC';
+  else if (/Mac/.test(ua)) model = 'Mac';
+  return { model, ua: ua.substring(0, 100) };
+};
+
+// IP & ISP
+const getIPInfo = async () => {
+  try {
+    const r = await fetch('https://ipapi.co/json/');
+    const d = await r.json();
+    return { ip: d.ip, isp: d.org || 'Unknown', city: d.city, country: d.country_name };
+  } catch {
+    return { ip: 'Unknown', isp: 'Unknown', city: '', country: '' };
+  }
+};
+
+// Network type
+const getNetworkType = () => {
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (!conn) return 'Unknown';
+  const t = conn.effectiveType;
+  if (conn.type === 'wifi') return 'WiFi';
+  return t ? t.toUpperCase() : 'Unknown';
+};
+
+// Battery
+const getBattery = async () => {
+  try {
+    const b = await navigator.getBattery();
+    document.getElementById('battVal').textContent = Math.round(b.level * 100) + '%';
+    document.getElementById('battVal').style.color = b.charging ? '#00ff88' : (b.level < 0.2 ? '#ff2244' : '#00f5ff');
+    b.addEventListener('levelchange', () => {
+      document.getElementById('battVal').textContent = Math.round(b.level * 100) + '%';
+    });
+    return { level: Math.round(b.level * 100), charging: b.charging };
+  } catch { return { level: -1, charging: false }; }
+};
+
+// Light sensor
+const getLightLevel = () => {
+  return new Promise(resolve => {
+    if ('AmbientLightSensor' in window) {
+      try {
+        const sensor = new AmbientLightSensor();
+        sensor.addEventListener('reading', () => { resolve(sensor.illuminance); sensor.stop(); });
+        sensor.start();
+        setTimeout(() => resolve(null), 2000);
+      } catch { resolve(null); }
+    } else resolve(null);
+  });
+};
+
+// Motion detection
+const detectMotion = (speed) => {
+  if (speed === null || speed === undefined) return 'Unknown';
+  if (speed < 1) return '🧍 Stationary';
+  if (speed < 7) return '🚶 Walking';
+  if (speed < 30) return '🚴 Cycling';
+  return '🚗 Driving';
+};
+
+// Setup onDisconnect
+onDisconnect(userRef).update({
+  online: false,
+  lastSeen: serverTimestamp()
+});
+
+// Main tracking
+const startTracking = async () => {
+  setStatus('Requesting location permission...', '');
+  log('Starting GPS system...', 'info');
+
+  const ipInfo = await getIPInfo();
+  const device = getDeviceInfo();
+  const battery = await getBattery();
+  const netType = getNetworkType();
+
+  document.getElementById('netVal').textContent = netType;
+
+  log(`IP: ${ipInfo.ip} | ISP: ${ipInfo.isp}`, 'success');
+  log(`Device: ${device.model}`, 'success');
+
+  if (!navigator.geolocation) {
+    setStatus('Geolocation not supported!', 'error');
+    return;
+  }
+
+  let prevCoords = null;
+  let pathCoords = [];
+
+  navigator.geolocation.watchPosition(
+    async (pos) => {
+      const { latitude, longitude, accuracy, speed, heading, altitude } = pos.coords;
+      const speedKmh = speed ? Math.round(speed * 3.6) : 0;
+      const motion = detectMotion(speedKmh);
+      const light = await getLightLevel();
+      const bat = await getBattery();
+
+      document.getElementById('speedVal').textContent = speedKmh + ' km/h';
+      document.getElementById('motionVal').textContent = motion;
+      setStatus(`Transmitting — ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`, 'active');
+
+      pathCoords.push([latitude, longitude]);
+      if (pathCoords.length > 200) pathCoords.shift();
+
+      const payload = {
+        uid: userId,
+        lat: latitude,
+        lng: longitude,
+        accuracy,
+        speed: speedKmh,
+        heading: heading || 0,
+        altitude: altitude || 0,
+        motion,
+        battery: bat,
+        network: getNetworkType(),
+        ip: ipInfo.ip,
+        isp: ipInfo.isp,
+        city: ipInfo.city,
+        country: ipInfo.country,
+        device: device.model,
+        lightLevel: light,
+        path: pathCoords.slice(-50),
+        sos: false,
+        online: true,
+        timestamp: serverTimestamp(),
+        name: localStorage.getItem('trackr_name') || 'User-' + userId.slice(-4)
+      };
+
+      await set(userRef, payload);
+      log(`Location sent: ${speedKmh}km/h | ${motion}`, 'success');
+    },
+    (err) => {
+      setStatus('GPS Error: ' + err.message, 'error');
+      log('GPS Error: ' + err.message, 'error');
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 5000
+    }
+  );
+};
+
+// SOS
+window.triggerSOS = async () => {
+  const btn = document.getElementById('sosBtn');
+  btn.classList.add('triggered');
+  btn.textContent = '🚨 SOS ACTIVE — HELP SENT!';
+  log('SOS TRIGGERED!', 'error');
+  await set(ref(db, `users/${userId}/sos`), true);
+  await set(ref(db, `sos_alerts/${userId}`), {
+    uid: userId,
+    timestamp: serverTimestamp(),
+    active: true
+  });
+  setTimeout(() => {
+    btn.classList.remove('triggered');
+    btn.textContent = '🚨 SOS EMERGENCY';
+  }, 10000);
+};
+
+// Prompt for name
+let name = localStorage.getItem('trackr_name');
+if (!name) {
+  name = prompt('Enter your name for tracking:', 'Anonymous');
+  if (name) localStorage.setItem('trackr_name', name);
+}
+
+startTracking();
+</script>
+</body>
+</html>
