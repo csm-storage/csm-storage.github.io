@@ -179,11 +179,14 @@
         <div class="toolbar-right">
             <button id="gridViewBtn" class="view-btn active" onclick="window.setView('grid')" title="Grid"><i class="fas fa-grip"></i></button>
             <button id="listViewBtn" class="view-btn" onclick="window.setView('list')" title="List"><i class="fas fa-list"></i></button>
-            <button class="upload-btn" onclick="window.toggleUploadPanel()" title="Upload">
-                <i class="fas fa-cloud-arrow-up"></i>
-                <span>Upload</span>
-                <span id="uploadQueueBadge" class="queue-badge hidden">0</span>
-            </button>
+
+
+<button class="upload-btn" onclick="window.open('https://csm-storage.github.io/upload', '_blank')" title="Upload">
+    <i class="fas fa-cloud-arrow-up"></i>
+    <span>Upload</span>
+    <span id="uploadQueueBadge" class="queue-badge hidden">0</span>
+</button>
+            
             <button class="select-btn" id="selectModeBtn" onclick="window.toggleSelectMode()" title="Select">
                 <i class="fas fa-check-square"></i>
             </button>
