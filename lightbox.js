@@ -623,13 +623,109 @@ const NexusLightbox = (() => {
     /* ─── Action handlers ───────────────────────────────────────── */
     function onStar()  { const it = items[currentIdx]; if (it && cb.onStar)  cb.onStar(it.id, !!it.starred); }
     function onTrash() { const it = items[currentIdx]; if (it && cb.onTrash) { close(); cb.onTrash(it.id); } }
-    function onDl()    {
-        const it = items[currentIdx]; if (!it) return;
-        const a = document.createElement('a');
-        a.href = it.offlineData || it.src;
-        a.download = it.name || 'file';
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    function onDl() {
+    const it = items[currentIdx];
+    if (!it) return;
+
+    let url = it.offlineData || it.src;
+    let fileName = it.name || "file";
+
+    // Progress Box
+    const progressBox = document.createElement("div");
+    progressBox.style.position = "fixed";
+    progressBox.style.bottom = "20px";
+    progressBox.style.left = "50%";
+    progressBox.style.transform = "translateX(-50%)";
+    progressBox.style.background = "#111";
+    progressBox.style.color = "#00ffcc";
+    progressBox.style.padding = "12px 20px";
+    progressBox.style.borderRadius = "8px";
+    progressBox.style.fontSize = "14px";
+    progressBox.style.zIndex = "999999";
+    progressBox.innerHTML = "Preparing download... 0%";
+    document.body.appendChild(progressBox);
+
+    // যদি offlineData থাকে → direct blob download
+    if (it.offlineData) {
+        fetch(it.offlineData)
+            .then(res => res.blob())
+            .then(blob => finishDownload(blob))
+            .catch(() => showError());
+        return;
     }
+
+    // Online download with progress
+    fetch(url).then(response => {
+        if (!response.ok) throw new Error("Network error");
+
+        const contentLength = response.headers.get("content-length");
+        const total = contentLength ? parseInt(contentLength, 10) : 0;
+        let loaded = 0;
+
+        const reader = response.body.getReader();
+        const chunks = [];
+
+        function read() {
+            return reader.read().then(({ done, value }) => {
+                if (done) return;
+
+                chunks.push(value);
+                loaded += value.length;
+
+                if (total) {
+                    const percent = Math.round((loaded / total) * 100);
+                    progressBox.innerHTML = `Downloading... ${percent}%`;
+                } else {
+                    progressBox.innerHTML = `Downloading...`;
+                }
+
+                return read();
+            });
+        }
+
+        return read().then(() => {
+            const blob = new Blob(chunks);
+
+            // Cache save
+            caches.open("csm-download-cache").then(cache => {
+                cache.put(url, new Response(blob));
+            });
+
+            finishDownload(blob);
+        });
+
+    }).catch(() => {
+        // Try cache if offline
+        caches.open("csm-download-cache")
+            .then(cache => cache.match(url))
+            .then(response => {
+                if (response) {
+                    return response.blob().then(blob => finishDownload(blob));
+                } else {
+                    showError();
+                }
+            });
+    });
+
+    function finishDownload(blob) {
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+
+        progressBox.innerHTML = "Download Complete ✅";
+        setTimeout(() => progressBox.remove(), 2000);
+    }
+
+    function showError() {
+        progressBox.innerHTML = "Offline file not available ❌";
+        setTimeout(() => progressBox.remove(), 2000);
+    }
+}
 
     /* ─── Filmstrip ─────────────────────────────────────────────── */
     function buildFilmstrip() {
