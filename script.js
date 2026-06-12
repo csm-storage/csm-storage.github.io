@@ -1,30 +1,23 @@
 /**
- * CSM DRIVE | ULTRA PRO — script.js v4
+ * CSM DRIVE | ULTRA PRO — script.js v5
  * Developer: Csm Mohasin Alam
  *
- * Features:
- *  - Firebase Realtime DB + Cloudinary storage
- *  - IndexedDB offline cache (files + folders + sync queue + upload queue)
- *  - Offline-first load + full CRUD synced offline
- *  - Background sync (online event + SW postMessage)
- *  - NexusLightbox — custom zero-CDN lightbox with working zoom/pan
- *  - Scroll-reveal animations (AOS via IntersectionObserver)
- *  - Smart upload with multi-file staging, drag-drop, progress
- *  - Folder system with color picker
- *  - Star, lock (passcode-gated), trash, restore, permanent delete
- *  - Multi-select with batch operations
- *  - Context menu (right-click + long press mobile)
- *  - Toast notifications
- *  - Sort + search + grid/list view
- *  - Particle canvas background
- *  - Light/dark theme toggle
+ * v5 Changes:
+ *  - Migrated from Realtime DB to Firestore
+ *  - Dual-source: Google Drive (primary) + Cloudinary (secondary/fallback)
+ *  - Drive files served via Cloudflare Worker proxy (token-verified)
+ *  - Unified file schema: { source:"gdrive"|"cloudinary", drive_id, cloudinary_url, thumbnail, ... }
+ *  - All existing features preserved: lightbox, PWA, offline, fancybox, etc.
  */
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+import { initializeApp }            from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+                                    from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+import { getFirestore, collection, doc, getDocs, addDoc, setDoc, updateDoc,
+         deleteDoc, onSnapshot, query, orderBy, serverTimestamp }
+                                    from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
-/* ─── Firebase config ───────────────────────────────────────── */
+/* ─── Firebase config ──────────────────────────────────────── */
 const firebaseConfig = {
     apiKey:      "AIzaSyBtmUmV1KxQDB0jN9gUQnh-eYWKllMPav0",
     authDomain:  "photos-58c8e.firebaseapp.com",
@@ -33,10 +26,16 @@ const firebaseConfig = {
 };
 const fbApp = initializeApp(firebaseConfig);
 const auth  = getAuth(fbApp);
-const db    = getDatabase(fbApp);
-const DB_PATH       = 'my_gallery';
-const FOLDERS_PATH  = 'folders';
-const SETTINGS_PATH = 'settings';
+const db    = getFirestore(fbApp);
+
+/* ─── Cloudflare Worker URL ─────────────────────────────────── */
+// Replace with your deployed worker URL after deploying worker.js
+const WORKER_URL = "https://csm-drive-proxy.YOUR_SUBDOMAIN.workers.dev";
+
+/* ─── Firestore collection paths ────────────────────────────── */
+const FILES_COL    = "files";
+const FOLDERS_COL  = "folders";
+const SETTINGS_COL = "settings";
 
 /* ─── App State ─────────────────────────────────────────────── */
 let allFiles        = [];
@@ -56,10 +55,12 @@ let passcodeInput   = '';
 let sessionUnlocked = false;
 let pendingUploadFiles = [];
 let uploadInProgress   = false;
+let firestoreUnsub     = null;
+let foldersUnsub       = null;
 
 /* ─── IndexedDB ─────────────────────────────────────────────── */
 const IDB_NAME    = 'csm_drive_db';
-const IDB_VERSION = 3;
+const IDB_VERSION = 4;
 let idb = null;
 
 function openIDB() {
@@ -94,7 +95,7 @@ async function idbPut(store, val) {
 async function idbGet(store, key) {
     await ensureIDB();
     return new Promise((res, rej) => {
-        const tx = idb.transaction(store, 'readonly');
+        const tx  = idb.transaction(store, 'readonly');
         const req = tx.objectStore(store).get(key);
         req.onsuccess = () => res(req.result);
         req.onerror   = () => rej(req.error);
@@ -133,13 +134,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     initParticles();
     initSyncManager();
     initTheme();
-    // Toast container
     const tc = document.createElement('div');
     tc.id = 'toastContainer';
     document.body.appendChild(tc);
 });
 
-/* ─── AOS — Scroll reveal ───────────────────────────────────── */
+/* ─── AOS ────────────────────────────────────────────────────── */
 function initAOS() {
     const observer = new IntersectionObserver(entries => {
         entries.forEach(entry => {
@@ -152,7 +152,7 @@ function initAOS() {
     document.querySelectorAll('[data-aos]').forEach(el => observer.observe(el));
 }
 
-/* ─── Theme toggle ──────────────────────────────────────────── */
+/* ─── Theme ──────────────────────────────────────────────────── */
 function initTheme() {
     const saved = localStorage.getItem('csm_theme');
     if (saved === 'light') document.body.classList.add('theme-light');
@@ -162,7 +162,7 @@ window.toggleTheme = () => {
     localStorage.setItem('csm_theme', document.body.classList.contains('theme-light') ? 'light' : 'dark');
 };
 
-/* ─── Particles ─────────────────────────────────────────────── */
+/* ─── Particles ──────────────────────────────────────────────── */
 function initParticles() {
     const canvas = document.getElementById('particles');
     if (!canvas) return;
@@ -207,11 +207,10 @@ function initParticles() {
     });
 }
 
-/* ─── Sync Manager ──────────────────────────────────────────── */
+/* ─── Sync Manager ───────────────────────────────────────────── */
 function initSyncManager() {
     window.addEventListener('online',  handleOnline);
     window.addEventListener('offline', handleOffline);
-
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.addEventListener('message', e => {
             if (e.data?.type === 'PROCESS_SYNC_QUEUE')   processSyncQueue();
@@ -247,12 +246,12 @@ function setSyncBadge(cls, label) {
         : `<i class="fas fa-check-circle"></i> <span>${label}</span>`;
 }
 
-/* ─── Auth ──────────────────────────────────────────────────── */
+/* ─── Auth ───────────────────────────────────────────────────── */
 onAuthStateChanged(auth, async user => {
     if (user) {
         document.getElementById('loginSection').classList.add('hidden');
 
-        // Instant offline load from IDB
+        // Instant offline load
         const [cachedFiles, cachedFolders] = await Promise.all([
             idbGetAll('files'), idbGetAll('folders')
         ]);
@@ -266,17 +265,22 @@ onAuthStateChanged(auth, async user => {
                 sessionUnlocked = true;
                 document.getElementById('passcodeSection').classList.add('hidden');
                 showMain();
-                loadData(); loadFolders(); loadSettings();
+                subscribeFirestore();
+                loadSettings();
             });
         } else {
             showMain();
-            loadData(); loadFolders(); loadSettings();
+            subscribeFirestore();
+            loadSettings();
         }
 
         setTimeout(() => {
             if (navigator.onLine) { processSyncQueue(); processUploadQueue(); }
         }, 2500);
     } else {
+        // Unsubscribe Firestore listeners on logout
+        if (firestoreUnsub)  { firestoreUnsub();  firestoreUnsub  = null; }
+        if (foldersUnsub)    { foldersUnsub();    foldersUnsub    = null; }
         document.getElementById('loginSection').classList.remove('hidden');
         document.getElementById('mainContent').classList.add('hidden');
         document.getElementById('passcodeSection').classList.add('hidden');
@@ -288,7 +292,6 @@ function showMain() {
     const mc = document.getElementById('mainContent');
     mc.classList.remove('hidden');
     mc.classList.add('fade-in');
-    // Trigger AOS for newly visible elements
     setTimeout(() => {
         document.querySelectorAll('[data-aos]:not(.aos-in)').forEach(el => {
             const observer = new IntersectionObserver(entries => {
@@ -301,7 +304,7 @@ function showMain() {
     }, 100);
 }
 
-/* ─── Login ─────────────────────────────────────────────────── */
+/* ─── Login ──────────────────────────────────────────────────── */
 document.getElementById('doLogin').onclick = async () => {
     const btn   = document.getElementById('doLogin');
     const idle  = btn.querySelector('.btn-idle');
@@ -324,7 +327,7 @@ document.getElementById('loginPass').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('doLogin').click();
 });
 
-/* ─── Passcode ──────────────────────────────────────────────── */
+/* ─── Passcode ───────────────────────────────────────────────── */
 function showPasscodeScreen(cb) {
     passcodeCallback = cb; passcodeInput = '';
     document.getElementById('passcodeSection').classList.remove('hidden');
@@ -372,40 +375,56 @@ window.confirmLogout = () => {
         body:  'Are you sure you want to sign out?',
         btns:  [
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
-            { label: 'Sign Out', cls: 'modal-btn-danger', action: async () => { closeModal(); await signOut(auth); sessionUnlocked = false; } }
+            { label: 'Sign Out', cls: 'modal-btn-danger', action: async () => {
+                closeModal(); await signOut(auth); sessionUnlocked = false;
+            }}
         ]
     });
 };
 
-/* ─── Firebase — Load Data ───────────────────────────────────── */
-function loadData() {
+/* ═══════════════════════════════════════════════════════════════
+   FIRESTORE — Real-time listeners (replaces Realtime DB)
+   File schema v5:
+   {
+     id, name, cat, size, folder, time, starred, locked, trash,
+     source: "gdrive" | "cloudinary",
+     drive_id: "1aBcXxxx",          // Google Drive file ID (gdrive only)
+     cloudinary_url: "https://...", // Cloudinary URL (cloudinary only)
+     thumbnail: "https://...",      // thumbnail URL for both sources
+     uploadedAt: Firestore timestamp
+   }
+   ═══════════════════════════════════════════════════════════════ */
+
+function subscribeFirestore() {
     if (!navigator.onLine) return;
-    onValue(ref(db, DB_PATH), async snap => {
-        allFiles = [];
-        snap.forEach(child => {
-            allFiles.push({ id: child.key, ...child.val() });
-        });
-        // Preserve offlineData from IDB cache
-        const cached = await idbGetAll('files');
+
+    // Files listener
+    const filesQ = query(collection(db, FILES_COL), orderBy('time', 'desc'));
+    firestoreUnsub = onSnapshot(filesQ, async snap => {
+        allFiles = snap.docs.map(d => ({ id: d.id, ...d.val_data() }));
+        // Compat: onSnapshot docs use .data(), not .val_data()
+        allFiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Restore offline-cached blobs
+        const cached  = await idbGetAll('files');
         const cacheMap = Object.fromEntries(cached.map(f => [f.id, f]));
         allFiles.forEach(f => {
             if (cacheMap[f.id]?.offlineData) f.offlineData = cacheMap[f.id].offlineData;
         });
-        // Save to IDB
+
         await Promise.all(allFiles.map(f => idbPut('files', f)));
         updateStats(); renderFolders(); render(); updateFolderSelect();
         setSyncBadge('', 'SYNCED');
 
-        // Background: pre-cache image blobs for offline lightbox
         setTimeout(() => { if (navigator.onLine) preCacheAllImages(); }, 1500);
+    }, err => {
+        console.warn('[Firestore] files error:', err);
+        setSyncBadge('offline', 'OFFLINE');
     });
-}
 
-function loadFolders() {
-    if (!navigator.onLine) return;
-    onValue(ref(db, FOLDERS_PATH), async snap => {
-        folders = [];
-        snap.forEach(child => folders.push({ id: child.key, ...child.val() }));
+    // Folders listener
+    foldersUnsub = onSnapshot(collection(db, FOLDERS_COL), async snap => {
+        folders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         await Promise.all(folders.map(f => idbPut('folders', f)));
         renderFolders(); updateFolderSelect();
     });
@@ -413,27 +432,66 @@ function loadFolders() {
 
 function loadSettings() {
     if (!navigator.onLine) return;
-    onValue(ref(db, SETTINGS_PATH), snap => {
-        const s = snap.val();
-        if (s?.passcode)        appPasscode     = s.passcode;
-        if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
+    onSnapshot(collection(db, SETTINGS_COL), snap => {
+        snap.docs.forEach(d => {
+            const s = d.data();
+            if (s?.passcode)                  appPasscode     = s.passcode;
+            if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
+        });
     });
 }
 
-/* ─── Pre-cache images for offline viewing ───────────────────── */
+/* ─── Helper: get file display URL ─────────────────────────────
+   - gdrive:      proxied through Cloudflare Worker (token-auth)
+   - cloudinary:  direct Cloudinary URL
+   ─────────────────────────────────────────────────────────────── */
+async function getFileUrl(file, size = 'full') {
+    if (file.source === 'gdrive' && file.drive_id) {
+        const token = await auth.currentUser?.getIdToken();
+        const sz    = size === 'thumb' ? '&thumb=1' : '';
+        return `${WORKER_URL}/drive/${file.drive_id}?token=${encodeURIComponent(token)}${sz}`;
+    }
+    // Cloudinary (existing behavior)
+    const base = file.cloudinary_url || file.url || '';
+    if (size === 'thumb' && base.includes('/upload/'))
+        return base.replace('/upload/', '/upload/w_400,q_auto,f_auto/');
+    return base;
+}
+
+function getThumbnail(file) {
+    // Pre-stored thumbnail takes priority (set when registering Drive files)
+    if (file.thumbnail) return file.thumbnail;
+    if (file.source === 'cloudinary') {
+        const base = file.cloudinary_url || file.url || '';
+        if (base.includes('/upload/'))
+            return base.replace('/upload/', '/upload/w_400,q_auto,f_auto/');
+        return base;
+    }
+    // gdrive: thumbnail served via worker; use a placeholder until loaded
+    return `${WORKER_URL}/drive/${file.drive_id}/thumb`;
+}
+
+/* ─── Pre-cache images for offline viewing ──────────────────── */
 async function preCacheAllImages() {
-    const imgs = allFiles.filter(f => f.cat !== 'video' && f.url && !f.offlineData && !f.trash);
+    const imgs = allFiles.filter(f => f.cat !== 'video' && !f.offlineData && !f.trash);
     for (const file of imgs) {
         try {
-            // Use w_800 transform for reasonable size
-            const thumbUrl = file.url.includes('/upload/')
-                ? file.url.replace('/upload/', '/upload/w_800,q_auto,f_auto/')
-                : file.url;
-            const blob   = await fetch(thumbUrl).then(r => r.blob());
-            const b64    = await blobToBase64(blob);
+            let thumbUrl;
+            if (file.source === 'gdrive') {
+                // Use stored thumbnail for Drive files (avoids needing a Worker call for cache)
+                thumbUrl = file.thumbnail || null;
+            } else {
+                const base = file.cloudinary_url || file.url || '';
+                thumbUrl = base.includes('/upload/')
+                    ? base.replace('/upload/', '/upload/w_800,q_auto,f_auto/')
+                    : base;
+            }
+            if (!thumbUrl) continue;
+            const blob = await fetch(thumbUrl).then(r => r.blob());
+            const b64  = await blobToBase64(blob);
             file.offlineData = b64;
             await idbPut('files', { ...file });
-        } catch (e) { /* skip failures */ }
+        } catch (e) { /* skip */ }
     }
 }
 
@@ -446,12 +504,11 @@ function blobToBase64(blob) {
     });
 }
 
-/* ─── Sync queue ─────────────────────────────────────────────── */
+/* ─── Sync queue (offline ops) ──────────────────────────────── */
 async function addToSyncQueue(op) {
     await ensureIDB();
     const tx = idb.transaction('syncQueue', 'readwrite');
     tx.objectStore('syncQueue').add({ ...op, ts: Date.now() });
-    // Register background sync if available
     if ('serviceWorker' in navigator && 'SyncManager' in window) {
         const reg = await navigator.serviceWorker.ready;
         reg.sync.register('csm-sync-queue').catch(() => {});
@@ -463,11 +520,17 @@ async function processSyncQueue() {
     if (!items.length) { setSyncBadge('', 'SYNCED'); return; }
     for (const item of items) {
         try {
-            if (item.type === 'update') await update(ref(db, `${DB_PATH}/${item.id}`), item.data);
-            if (item.type === 'delete') await remove(ref(db, `${DB_PATH}/${item.id}`));
-            if (item.type === 'create') await set(ref(db, `${DB_PATH}/${item.id}`), item.data);
-            if (item.type === 'folderCreate') await set(ref(db, `${FOLDERS_PATH}/${item.id}`), item.data);
-            if (item.type === 'folderDelete') await remove(ref(db, `${FOLDERS_PATH}/${item.id}`));
+            if (item.type === 'update') {
+                await updateDoc(doc(db, FILES_COL, item.id), item.data);
+            } else if (item.type === 'delete') {
+                await deleteDoc(doc(db, FILES_COL, item.id));
+            } else if (item.type === 'create') {
+                await setDoc(doc(db, FILES_COL, item.id), item.data);
+            } else if (item.type === 'folderCreate') {
+                await setDoc(doc(db, FOLDERS_COL, item.id), item.data);
+            } else if (item.type === 'folderDelete') {
+                await deleteDoc(doc(db, FOLDERS_COL, item.id));
+            }
             await idbDelete('syncQueue', item.qid);
         } catch (e) { console.warn('[Sync] Failed:', e); }
     }
@@ -475,7 +538,7 @@ async function processSyncQueue() {
     showToast('All changes synced', 'success');
 }
 
-/* ─── Upload queue (offline) ─────────────────────────────────── */
+/* ─── Upload queue (offline Cloudinary uploads) ─────────────── */
 async function addToPendingUploads(fileItem) {
     const b64 = await blobToBase64(fileItem.file);
     await ensureIDB();
@@ -496,9 +559,9 @@ async function processUploadQueue() {
     if (!items.length) return;
     for (const item of items) {
         try {
-            const blob   = await fetch(item.b64).then(r => r.blob());
-            const file   = new File([blob], item.name, { type: item.type });
-            await uploadQueuedItem(file, item.customName, item.folder);
+            const blob = await fetch(item.b64).then(r => r.blob());
+            const file = new File([blob], item.name, { type: item.type });
+            await uploadToCloudinary(file, item.customName, item.folder);
             await idbDelete('pendingUploads', item.uid);
         } catch (e) { console.warn('[Upload] Failed:', e); }
     }
@@ -506,7 +569,7 @@ async function processUploadQueue() {
     showToast('Offline uploads complete!', 'success');
 }
 
-async function uploadQueuedItem(file, customName, folder) {
+async function uploadToCloudinary(file, customName, folder) {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('upload_preset', 'github_unsigned');
@@ -514,16 +577,19 @@ async function uploadQueuedItem(file, customName, folder) {
     const data = await res.json();
     const isVid = file.type.startsWith('video');
     const rec = {
-        url:     data.secure_url,
+        source: 'cloudinary',
+        cloudinary_url: data.secure_url,
+        url:     data.secure_url, // compat alias
+        thumbnail: isVid ? null : data.secure_url.replace('/upload/', '/upload/w_400,q_auto,f_auto/'),
         cat:     isVid ? 'video' : 'image',
         name:    customName || file.name.replace(/\.[^.]+$/, ''),
         size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
         folder:  folder || '',
         time:    Date.now(),
-        starred: false, locked: false, trash: false
+        starred: false, locked: false, trash: false,
+        uploadedAt: serverTimestamp()
     };
-    const newRef = push(ref(db, DB_PATH));
-    await set(newRef, rec);
+    await addDoc(collection(db, FILES_COL), rec);
 }
 
 function updateUploadQueueBadge() {
@@ -541,12 +607,12 @@ function updateUploadQueueBadge() {
 
 /* ─── Stats ──────────────────────────────────────────────────── */
 function updateStats() {
-    const active   = allFiles.filter(f => !f.trash);
-    const imgs     = active.filter(f => f.cat !== 'video').length;
-    const vids     = active.filter(f => f.cat === 'video').length;
-    const stars    = active.filter(f => f.starred).length;
-    const trashed  = allFiles.filter(f => f.trash).length;
-    const total    = Math.max(active.length, 1);
+    const active  = allFiles.filter(f => !f.trash);
+    const imgs    = active.filter(f => f.cat !== 'video').length;
+    const vids    = active.filter(f => f.cat === 'video').length;
+    const stars   = active.filter(f => f.starred).length;
+    const trashed = allFiles.filter(f => f.trash).length;
+    const total   = Math.max(active.length, 1);
 
     document.getElementById('imgCount').textContent   = imgs;
     document.getElementById('vidCount').textContent   = vids;
@@ -619,13 +685,18 @@ function sortedList(list) {
 /* ─── Build lightbox items ───────────────────────────────────── */
 function buildLbItems(list) {
     return list.map(file => {
-        let thumb = file.url || '';
-        if (thumb.includes('/upload/')) thumb = thumb.replace('/upload/', '/upload/w_200,q_auto,f_auto/');
-        const fo = folders.find(f => f.id === file.folder);
+        const thumb = getThumbnail(file);
+        const fo    = folders.find(f => f.id === file.folder);
         const dateStr = file.time ? new Date(file.time).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
+
+        // For lightbox src: Drive files need a token-bearing URL built async.
+        // We pass a special marker and resolve in lightbox open.
+        let src = file.cloudinary_url || file.url || '';
+        if (file.source === 'gdrive') src = `__gdrive__${file.drive_id}`;
+
         return {
             id:          file.id,
-            src:         file.url || '',
+            src,
             thumb,
             offlineData: file.offlineData || null,
             name:        file.name || 'Untitled',
@@ -634,6 +705,8 @@ function buildLbItems(list) {
             cat:         file.cat || 'image',
             starred:     !!file.starred,
             folder:      fo ? fo.name : 'None',
+            source:      file.source || 'cloudinary',
+            drive_id:    file.drive_id || null,
         };
     });
 }
@@ -663,10 +736,9 @@ function render() {
     const lbItems   = buildLbItems(list);
 
     list.forEach((file, idx) => {
-        let thumb = file.url || '';
-        if (thumb.includes('/upload/')) thumb = thumb.replace('/upload/', '/upload/w_400,q_auto,f_auto/');
-        const thumbSrc = (isOffline && file.offlineData) ? file.offlineData : thumb;
+        const thumbSrc = (isOffline && file.offlineData) ? file.offlineData : getThumbnail(file);
         const isVid    = file.cat === 'video';
+        const isGDrive = file.source === 'gdrive';
         const isLocked = file.locked && !file._unlocked;
         const fo       = folders.find(f => f.id === file.folder);
         const date     = file.time ? new Date(file.time).toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '—';
@@ -688,7 +760,7 @@ function render() {
         if (isLocked) {
             previewHTML = `<div style="width:100%;height:100%;background:#0a0a15;display:flex;align-items:center;justify-content:center;"><i class="fas fa-lock" style="font-size:2rem;color:rgba(255,170,0,0.3);"></i></div>`;
         } else if (isVid) {
-            const vsrc = isOffline ? '' : `${thumbSrc}#t=0.1`;
+            const vsrc = isOffline ? '' : (isGDrive ? '' : `${thumbSrc}#t=0.1`);
             previewHTML = (vsrc
                 ? `<video src="${vsrc}" muted preload="metadata" playsinline></video>`
                 : `<div style="width:100%;height:100%;background:#0a0a15;display:flex;align-items:center;justify-content:center;"><i class="fas fa-video" style="font-size:2rem;color:rgba(168,85,247,0.4);"></i></div>`)
@@ -697,9 +769,15 @@ function render() {
             previewHTML = `<img src="${thumbSrc}" loading="lazy" alt="${file.name || ''}">`;
         }
 
+        // Source badge (small indicator)
+        const sourceBadge = isGDrive
+            ? `<span style="position:absolute;bottom:6px;left:6px;font-size:0.5rem;background:rgba(66,133,244,0.85);color:#fff;padding:2px 5px;border-radius:4px;letter-spacing:0.5px;z-index:2;">DRIVE</span>`
+            : '';
+
         const trashMenu = `<div class="dd-header">Trash Actions</div>
             <div class="dd-item" onclick="window.restoreFile('${file.id}')"><i class="fas fa-rotate-left"></i> Restore</div>
             <div class="dd-item danger" onclick="window.permanentDelete('${file.id}')"><i class="fas fa-fire"></i> Delete Forever</div>`;
+
         const normalMenu = `<div class="dd-header">File Actions</div>
             <div class="dd-item" onclick="window.openNexusLightbox('${file.id}')"><i class="fas fa-expand"></i> View</div>
             <div class="dd-item" onclick="window.showFileInfo('${file.id}')"><i class="fas fa-circle-info"></i> Details</div>
@@ -710,8 +788,8 @@ function render() {
             <div class="dd-divider"></div>
             <div class="dd-item" onclick="window.star('${file.id}', ${!!file.starred})"><i class="fas fa-star"></i> ${file.starred ? 'Unstar' : 'Star'}</div>
             <div class="dd-item" onclick="window.toggleLock('${file.id}')"><i class="fas fa-${file.locked ? 'unlock' : 'lock'}"></i> ${file.locked ? 'Unlock' : 'Lock'}</div>
-            <div class="dd-item" onclick="window.copyLink('${file.url}')"><i class="fas fa-link"></i> Copy Link</div>
-            <div class="dd-item" onclick="window.downloadFile('${file.url}','${file.name}')"><i class="fas fa-download"></i> Download</div>
+            <div class="dd-item" onclick="window.copyLink('${file.cloudinary_url || file.url || ''}')"><i class="fas fa-link"></i> Copy Link</div>
+            <div class="dd-item" onclick="window.downloadFile('${file.id}','${file.name}')"><i class="fas fa-download"></i> Download</div>
             <div class="dd-divider"></div>
             <div class="dd-item danger" onclick="window.trashFile('${file.id}')"><i class="fas fa-trash"></i> Trash</div>`;
 
@@ -731,6 +809,7 @@ function render() {
             <div class="preview" ${previewClick}>
                 <span class="file-badge ${isVid ? 'badge-vid' : 'badge-img'}">${isVid ? 'Vid' : 'Img'}</span>
                 ${previewHTML}
+                ${sourceBadge}
                 <div class="preview-overlay"></div>
             </div>
             <div class="meta">
@@ -744,7 +823,6 @@ function render() {
 
     updateMultiBarActions();
 
-    // Re-trigger AOS for new card elements
     const obs = new IntersectionObserver(entries => {
         entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('aos-in'); obs.unobserve(e.target); } });
     }, { threshold: 0.05 });
@@ -767,14 +845,22 @@ function updateMultiBarActions() {
 }
 
 /* ─── NexusLightbox opener ───────────────────────────────────── */
-window.openNexusLightbox = fileId => {
+window.openNexusLightbox = async fileId => {
     const file = allFiles.find(f => f.id === fileId);
     if (!file) return;
     if (file.locked && !file._unlocked) { window.unlockFile(fileId); return; }
 
-    const list = sortedList(getVisibleFiles());
+    const list    = sortedList(getVisibleFiles());
     const lbItems = buildLbItems(list);
     const startIdx = lbItems.findIndex(li => li.id === fileId);
+
+    // Resolve Drive URLs with fresh token before opening lightbox
+    const token = auth.currentUser ? await auth.currentUser.getIdToken() : '';
+    for (const item of lbItems) {
+        if (item.source === 'gdrive' && item.drive_id) {
+            item.src = `${WORKER_URL}/drive/${item.drive_id}?token=${encodeURIComponent(token)}`;
+        }
+    }
 
     NexusLightbox.open(lbItems, startIdx >= 0 ? startIdx : 0, {
         onStar: async (id, curStarred) => {
@@ -783,8 +869,7 @@ window.openNexusLightbox = fileId => {
             f.starred = !curStarred;
             NexusLightbox.updateItem(id, { starred: f.starred });
             render();
-            if (navigator.onLine) update(ref(db, `${DB_PATH}/${id}`), { starred: f.starred });
-            else { await idbPut('files', f); await addToSyncQueue({ type:'update', id, data:{ starred: f.starred } }); }
+            await fsUpdate(id, { starred: f.starred });
             showToast(curStarred ? 'Removed from starred' : 'Added to starred', 'success');
         },
         onTrash: id => { window.trashFile(id); }
@@ -815,7 +900,7 @@ window.setView = mode => {
     render();
 };
 
-/* ─── Upload ─────────────────────────────────────────────────── */
+/* ─── Upload (Cloudinary — existing flow) ────────────────────── */
 window.toggleUploadPanel = () => {
     const p = document.getElementById('uploadPanel');
     const isHidden = p.classList.toggle('hidden');
@@ -860,18 +945,17 @@ window.removeStagedFile = i => { pendingUploadFiles.splice(i, 1); renderStagedFi
 window.startUpload = async () => {
     if (!pendingUploadFiles.length) { showToast('No files staged', 'warning'); return; }
     if (uploadInProgress) return;
-    const folder = document.getElementById('uploadFolder').value;
+    const folder     = document.getElementById('uploadFolder').value;
     const customName = document.getElementById('uploadName').value.trim();
 
     if (!navigator.onLine) {
-        // Queue for later
         for (const item of pendingUploadFiles) {
             await addToPendingUploads({ file: item.file, customName, folder });
             item.status = 'queued';
         }
         renderStagedFiles();
         updateUploadQueueBadge();
-        showToast(`${pendingUploadFiles.length} file(s) queued — will upload when online`, 'warning');
+        showToast(`${pendingUploadFiles.length} file(s) queued`, 'warning');
         return;
     }
 
@@ -929,16 +1013,19 @@ function uploadSingleFile(file, customName, folder, onProgress) {
                 onProgress(95);
                 const isVid = file.type.startsWith('video');
                 const rec = {
-                    url:     data.secure_url,
+                    source: 'cloudinary',
+                    cloudinary_url: data.secure_url,
+                    url:     data.secure_url, // compat
+                    thumbnail: isVid ? null : data.secure_url.replace('/upload/', '/upload/w_400,q_auto,f_auto/'),
                     cat:     isVid ? 'video' : 'image',
                     name:    customName || file.name.replace(/\.[^.]+$/, ''),
                     size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
                     folder:  folder || '',
                     time:    Date.now(),
-                    starred: false, locked: false, trash: false
+                    starred: false, locked: false, trash: false,
+                    uploadedAt: serverTimestamp()
                 };
-                const newRef = push(ref(db, DB_PATH));
-                await set(newRef, rec);
+                await addDoc(collection(db, FILES_COL), rec);
                 onProgress(100);
                 resolve();
             } else reject(new Error(xhr.statusText));
@@ -949,7 +1036,7 @@ function uploadSingleFile(file, customName, folder, onProgress) {
     });
 }
 
-/* ─── Dropdown menu ──────────────────────────────────────────── */
+/* ─── Dropdown ───────────────────────────────────────────────── */
 window.toggleMenu = (e, id) => {
     e.stopPropagation();
     const open = document.querySelector('.dropdown.show');
@@ -961,11 +1048,10 @@ document.addEventListener('click', e => {
         document.querySelectorAll('.dropdown.show').forEach(d => d.classList.remove('show'));
 });
 
-/* ─── Context menu (right-click / long press) ────────────────── */
-let longPressTimer = null;
+/* ─── Context menu ───────────────────────────────────────────── */
 window.showContextMenu = (e, id) => {
     contextTarget = id;
-    const cm = document.getElementById('contextMenu');
+    const cm   = document.getElementById('contextMenu');
     const file = allFiles.find(f => f.id === id);
     if (!file) return;
     cm.innerHTML = `
@@ -973,7 +1059,7 @@ window.showContextMenu = (e, id) => {
         <div class="dd-item" onclick="window.openNexusLightbox('${id}'); window.hideContextMenu()"><i class="fas fa-expand"></i> View</div>
         <div class="dd-item" onclick="window.star('${id}',${!!file.starred}); window.hideContextMenu()"><i class="fas fa-star"></i> ${file.starred?'Unstar':'Star'}</div>
         <div class="dd-item" onclick="window.renameFile('${id}'); window.hideContextMenu()"><i class="fas fa-pen"></i> Rename</div>
-        <div class="dd-item" onclick="window.downloadFile('${file.url}','${file.name}'); window.hideContextMenu()"><i class="fas fa-download"></i> Download</div>
+        <div class="dd-item" onclick="window.downloadFile('${file.id}','${file.name}'); window.hideContextMenu()"><i class="fas fa-download"></i> Download</div>
         <div class="dd-divider"></div>
         <div class="dd-item danger" onclick="window.trashFile('${id}'); window.hideContextMenu()"><i class="fas fa-trash"></i> Trash</div>`;
     cm.style.left = Math.min(e.clientX, window.innerWidth  - 190) + 'px';
@@ -983,12 +1069,12 @@ window.showContextMenu = (e, id) => {
 window.hideContextMenu = () => document.getElementById('contextMenu').classList.add('hidden');
 document.addEventListener('click', () => window.hideContextMenu());
 
-/* ─── File operations ────────────────────────────────────────── */
-async function fbUpdate(id, data) {
+/* ─── Firestore helpers ──────────────────────────────────────── */
+async function fsUpdate(id, data) {
     const f = allFiles.find(x => x.id === id);
     if (f) Object.assign(f, data);
     if (navigator.onLine) {
-        update(ref(db, `${DB_PATH}/${id}`), data);
+        await updateDoc(doc(db, FILES_COL, id), data);
     } else {
         if (f) await idbPut('files', f);
         await addToSyncQueue({ type: 'update', id, data });
@@ -997,30 +1083,31 @@ async function fbUpdate(id, data) {
     updateStats(); render();
 }
 
+/* ─── File operations ────────────────────────────────────────── */
 window.star = async (id, cur) => {
-    await fbUpdate(id, { starred: !cur });
+    await fsUpdate(id, { starred: !cur });
     showToast(cur ? 'Removed from starred' : 'Starred!', 'success');
 };
 
 window.trashFile = async id => {
-    await fbUpdate(id, { trash: true });
+    await fsUpdate(id, { trash: true });
     showToast('Moved to trash', 'info');
 };
 
 window.restoreFile = async id => {
-    await fbUpdate(id, { trash: false });
+    await fsUpdate(id, { trash: false });
     showToast('File restored', 'success');
 };
 
 window.permanentDelete = id => {
     showModal({
         title: 'DELETE FOREVER',
-        body:  'This action cannot be undone. The file will be permanently deleted.',
+        body:  'This action cannot be undone.',
         btns:  [
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
             { label: 'Delete Forever', cls: 'modal-btn-danger', action: async () => {
                 closeModal();
-                if (navigator.onLine) { await remove(ref(db, `${DB_PATH}/${id}`)); }
+                if (navigator.onLine) { await deleteDoc(doc(db, FILES_COL, id)); }
                 else { await addToSyncQueue({ type: 'delete', id }); }
                 allFiles = allFiles.filter(f => f.id !== id);
                 await idbDelete('files', id);
@@ -1036,7 +1123,7 @@ window.renameFile = id => {
     if (!file) return;
     showModal({
         title:   'RENAME FILE',
-        body:    'Enter a new name for this file:',
+        body:    'Enter a new name:',
         input:   file.name || '',
         btns:    [
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
@@ -1044,7 +1131,7 @@ window.renameFile = id => {
                 const newName = document.getElementById('modalInput')?.value.trim();
                 if (!newName) { showToast('Name cannot be empty', 'warning'); return; }
                 closeModal();
-                await fbUpdate(id, { name: newName });
+                await fsUpdate(id, { name: newName });
                 showToast('File renamed', 'success');
             }}
         ]
@@ -1057,11 +1144,11 @@ window.toggleLock = id => {
     if (file.locked) {
         showPasscodeScreen(() => {
             document.getElementById('passcodeSection').classList.add('hidden');
-            fbUpdate(id, { locked: false });
+            fsUpdate(id, { locked: false });
             showToast('File unlocked', 'success');
         });
     } else {
-        fbUpdate(id, { locked: true });
+        fsUpdate(id, { locked: true });
         showToast('File locked', 'success');
     }
 };
@@ -1077,15 +1164,11 @@ window.unlockFile = id => {
     });
 };
 
-window.moveToFolder = id => {
-    showFolderPicker(id, true);
-};
-window.copyToFolder = id => {
-    showFolderPicker(id, false);
-};
+window.moveToFolder = id => showFolderPicker(id, true);
+window.copyToFolder = id => showFolderPicker(id, false);
 
 function showFolderPicker(id, move) {
-    const opts = [{ value: '', label: 'No Folder' }, ...folders.map(f => ({ value: f.id, label: f.name }))];
+    const opts   = [{ value: '', label: 'No Folder' }, ...folders.map(f => ({ value: f.id, label: f.name }))];
     const optHtml = opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
     showModal({
         title:  move ? 'MOVE TO FOLDER' : 'COPY TO FOLDER',
@@ -1093,22 +1176,18 @@ function showFolderPicker(id, move) {
         btns:   [
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
             { label: move ? 'Move' : 'Copy', cls: 'modal-btn-confirm', action: async () => {
-                const sel = document.getElementById('folderPickerSel');
+                const sel      = document.getElementById('folderPickerSel');
                 const folderId = sel?.value || '';
                 closeModal();
                 if (move) {
-                    await fbUpdate(id, { folder: folderId });
+                    await fsUpdate(id, { folder: folderId });
                     showToast('File moved', 'success');
                 } else {
-                    // Copy: create new record
                     const file = allFiles.find(f => f.id === id);
                     if (!file) return;
                     const { id: _id, offlineData: _od, ...data } = file;
-                    data.folder = folderId;
-                    data.time   = Date.now();
-                    const newRef = push(ref(db, DB_PATH));
-                    if (navigator.onLine) await set(newRef, data);
-                    else await addToSyncQueue({ type: 'create', id: newRef.key, data });
+                    data.folder = folderId; data.time = Date.now();
+                    const newRef = await addDoc(collection(db, FILES_COL), data);
                     showToast('File copied', 'success');
                 }
             }}
@@ -1121,7 +1200,17 @@ window.copyLink = url => {
     showToast('Link copied', 'success');
 };
 
-window.downloadFile = (url, name) => {
+/* ─── Download — handles both sources ───────────────────────── */
+window.downloadFile = async (fileId, name) => {
+    const file = allFiles.find(f => f.id === fileId);
+    if (!file) return;
+    let url;
+    if (file.source === 'gdrive' && file.drive_id) {
+        const token = auth.currentUser ? await auth.currentUser.getIdToken() : '';
+        url = `${WORKER_URL}/drive/${file.drive_id}?token=${encodeURIComponent(token)}&dl=1`;
+    } else {
+        url = file.cloudinary_url || file.url || '';
+    }
     const a = document.createElement('a');
     a.href = url; a.download = name || 'file'; a.target = '_blank';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -1133,23 +1222,26 @@ window.showFileInfo = id => {
     const fo   = folders.find(f => f.id === file.folder);
     const date = file.time ? new Date(file.time).toLocaleString() : '—';
     const cached = file.offlineData ? '✅ Cached offline' : '⚡ Online only';
+    const src  = file.source === 'gdrive' ? `<div><b style="color:var(--text)">Drive ID:</b> ${file.drive_id}</div>` : '';
     showModal({
         title: 'FILE DETAILS',
         body: `<div style="display:flex;flex-direction:column;gap:8px;font-size:0.75rem;color:var(--text-muted);">
             <div><b style="color:var(--text)">Name:</b> ${file.name || '—'}</div>
             <div><b style="color:var(--text)">Type:</b> ${file.cat === 'video' ? 'Video' : 'Image'}</div>
+            <div><b style="color:var(--text)">Source:</b> ${file.source === 'gdrive' ? '🔵 Google Drive' : '☁️ Cloudinary'}</div>
             <div><b style="color:var(--text)">Size:</b> ${file.size || '—'}</div>
             <div><b style="color:var(--text)">Date:</b> ${date}</div>
             <div><b style="color:var(--text)">Folder:</b> ${fo ? fo.name : 'None'}</div>
             <div><b style="color:var(--text)">Starred:</b> ${file.starred ? '⭐ Yes' : 'No'}</div>
             <div><b style="color:var(--text)">Locked:</b> ${file.locked ? '🔒 Yes' : 'No'}</div>
             <div><b style="color:var(--text)">Cache:</b> ${cached}</div>
+            ${src}
         </div>`,
         btns: [{ label: 'Close', cls: 'modal-btn-cancel', action: closeModal }]
     });
 };
 
-/* ─── Trash bulk actions ─────────────────────────────────────── */
+/* ─── Trash bulk ─────────────────────────────────────────────── */
 window.restoreAll = () => {
     showModal({
         title: 'RESTORE ALL',
@@ -1159,7 +1251,7 @@ window.restoreAll = () => {
             { label: 'Restore All', cls: 'modal-btn-confirm', action: async () => {
                 closeModal();
                 const trashed = allFiles.filter(f => f.trash);
-                for (const f of trashed) await fbUpdate(f.id, { trash: false });
+                for (const f of trashed) await fsUpdate(f.id, { trash: false });
                 showToast(`Restored ${trashed.length} files`, 'success');
             }}
         ]
@@ -1169,14 +1261,14 @@ window.restoreAll = () => {
 window.purgeTrash = () => {
     showModal({
         title: 'EMPTY TRASH',
-        body:  'Permanently delete ALL trashed files? This cannot be undone.',
+        body:  'Permanently delete ALL trashed files?',
         btns:  [
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
             { label: 'Empty Trash', cls: 'modal-btn-danger', action: async () => {
                 closeModal();
                 const trashed = allFiles.filter(f => f.trash);
                 for (const f of trashed) {
-                    if (navigator.onLine) await remove(ref(db, `${DB_PATH}/${f.id}`));
+                    if (navigator.onLine) await deleteDoc(doc(db, FILES_COL, f.id));
                     else await addToSyncQueue({ type: 'delete', id: f.id });
                     await idbDelete('files', f.id);
                 }
@@ -1206,10 +1298,12 @@ window.createFolder = () => {
                 if (!name) { showToast('Enter a folder name', 'warning'); return; }
                 const color = window._pickedFolderColor || colors[0];
                 closeModal();
-                const newRef = push(ref(db, FOLDERS_PATH));
                 const fData = { name, color, time: Date.now() };
-                if (navigator.onLine) await set(newRef, fData);
-                else await addToSyncQueue({ type:'folderCreate', id: newRef.key, data: fData });
+                if (navigator.onLine) await addDoc(collection(db, FOLDERS_COL), fData);
+                else {
+                    const tempId = 'local_' + Date.now();
+                    await addToSyncQueue({ type:'folderCreate', id: tempId, data: fData });
+                }
                 showToast(`Folder "${name}" created`, 'success');
             }}
         ]
@@ -1226,7 +1320,7 @@ window.folderContext = (e, fid) => {
     if (!fo) return;
     showModal({
         title: `FOLDER: ${fo.name}`,
-        body:  'What would you like to do with this folder?',
+        body:  'What would you like to do?',
         btns:  [
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
             { label: 'Rename', cls: 'modal-btn-confirm', action: () => {
@@ -1240,7 +1334,7 @@ window.folderContext = (e, fid) => {
                             const n = document.getElementById('modalInput')?.value.trim();
                             if (!n) return;
                             closeModal();
-                            if (navigator.onLine) await update(ref(db, `${FOLDERS_PATH}/${fid}`), { name: n });
+                            if (navigator.onLine) await updateDoc(doc(db, FOLDERS_COL, fid), { name: n });
                             else await addToSyncQueue({ type:'update', id: fid, data:{ name: n } });
                             showToast('Folder renamed', 'success');
                         }}
@@ -1251,12 +1345,12 @@ window.folderContext = (e, fid) => {
                 closeModal();
                 showModal({
                     title: 'DELETE FOLDER',
-                    body:  `Delete folder "${fo.name}"? Files inside will stay but lose their folder.`,
+                    body:  `Delete "${fo.name}"? Files inside will stay.`,
                     btns:  [
                         { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
                         { label: 'Delete', cls: 'modal-btn-danger', action: async () => {
                             closeModal();
-                            if (navigator.onLine) await remove(ref(db, `${FOLDERS_PATH}/${fid}`));
+                            if (navigator.onLine) await deleteDoc(doc(db, FOLDERS_COL, fid));
                             else await addToSyncQueue({ type:'folderDelete', id: fid });
                             folders = folders.filter(f => f.id !== fid);
                             await idbDelete('folders', fid);
@@ -1283,7 +1377,6 @@ window.toggleSelect = id => {
     else selectedIds.add(id);
     updateMultiBar();
     document.querySelectorAll(`.card[data-id="${id}"]`).forEach(c => c.classList.toggle('selected', selectedIds.has(id)));
-    document.querySelectorAll(`#menu-${id}`).forEach(m => m.closest('.card')?.querySelector('.select-check')?.classList.toggle('checked', selectedIds.has(id)));
 };
 function updateMultiBar() {
     const bar = document.getElementById('multiBar');
@@ -1295,10 +1388,9 @@ function updateMultiBar() {
     }
 }
 
-/* Multi-select batch ops */
-window.multiTrash  = async () => { for (const id of selectedIds) await fbUpdate(id, { trash: true }); showToast(`${selectedIds.size} files trashed`, 'info'); selectedIds.clear(); updateMultiBar(); };
-window.multiStar   = async () => { for (const id of selectedIds) await fbUpdate(id, { starred: true }); showToast(`${selectedIds.size} files starred`, 'success'); };
-window.multiRestore = async () => { for (const id of selectedIds) await fbUpdate(id, { trash: false }); showToast(`${selectedIds.size} files restored`, 'success'); selectedIds.clear(); updateMultiBar(); };
+window.multiTrash   = async () => { for (const id of selectedIds) await fsUpdate(id, { trash: true }); showToast(`${selectedIds.size} files trashed`, 'info'); selectedIds.clear(); updateMultiBar(); };
+window.multiStar    = async () => { for (const id of selectedIds) await fsUpdate(id, { starred: true }); showToast(`${selectedIds.size} files starred`, 'success'); };
+window.multiRestore = async () => { for (const id of selectedIds) await fsUpdate(id, { trash: false }); showToast(`${selectedIds.size} files restored`, 'success'); selectedIds.clear(); updateMultiBar(); };
 window.multiPermanentDelete = () => {
     showModal({
         title: 'DELETE SELECTED',
@@ -1308,7 +1400,7 @@ window.multiPermanentDelete = () => {
             { label: 'Delete All', cls: 'modal-btn-danger', action: async () => {
                 closeModal();
                 for (const id of selectedIds) {
-                    if (navigator.onLine) await remove(ref(db, `${DB_PATH}/${id}`));
+                    if (navigator.onLine) await deleteDoc(doc(db, FILES_COL, id));
                     else await addToSyncQueue({ type:'delete', id });
                     allFiles = allFiles.filter(f => f.id !== id);
                     await idbDelete('files', id);
@@ -1322,7 +1414,7 @@ window.multiPermanentDelete = () => {
 window.multiDownload = () => {
     for (const id of selectedIds) {
         const f = allFiles.find(x => x.id === id);
-        if (f) window.downloadFile(f.url, f.name);
+        if (f) window.downloadFile(f.id, f.name);
     }
 };
 window.multiCopy = () => {
@@ -1334,11 +1426,10 @@ function showModal({ title, body, input, btns }) {
     const overlay = document.getElementById('modalOverlay');
     const box     = document.getElementById('modalBox');
     const inputHtml = input !== undefined
-        ? `<input id="modalInput" class="modal-input" value="${input}" placeholder="Enter name…">`
-        : '';
+        ? `<input id="modalInput" class="modal-input" value="${input}" placeholder="Enter name…">` : '';
     box.innerHTML = `
         <div class="modal-title">${title}</div>
-        ${typeof body === 'string' && body.startsWith('<') ? `<div class="modal-body">${body}</div>` : `<div class="modal-body">${body}</div>`}
+        <div class="modal-body">${body}</div>
         ${inputHtml}
         <div class="modal-btns">${btns.map((b, i) => `<button class="modal-btn ${b.cls}" id="mbtn-${i}">${b.label}</button>`).join('')}</div>`;
     btns.forEach((b, i) => document.getElementById(`mbtn-${i}`).onclick = b.action);
@@ -1363,7 +1454,7 @@ function showToast(msg, type = 'info') {
     setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 3000);
 }
 
-/* ─── Settings shortcuts ─────────────────────────────────────── */
+/* ─── Settings ───────────────────────────────────────────────── */
 window.updatePasscode = () => {
     showModal({
         title: 'CHANGE PASSCODE',
@@ -1376,7 +1467,10 @@ window.updatePasscode = () => {
                 if (!/^\d{4}$/.test(n)) { showToast('Must be 4 digits', 'warning'); return; }
                 closeModal();
                 appPasscode = n;
-                if (navigator.onLine) update(ref(db, SETTINGS_PATH), { passcode: n });
+                if (navigator.onLine) {
+                    const settingsRef = doc(db, SETTINGS_COL, 'app');
+                    await setDoc(settingsRef, { passcode: n }, { merge: true });
+                }
                 showToast('Passcode updated', 'success');
             }}
         ]

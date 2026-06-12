@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="theme-color" content="#00ffcc">
+    <title>CSM DRIVE | GDrive Admin</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --neon:   #00ffcc;
+            --neon2:  #00d4ff;
+            --purple: #7b2fff;
+            --bg:     #030308;
+            --card:   #0a0a18;
+            --border: rgba(0,255,204,0.15);
+            --text:   #e8e8f0;
+            --muted:  rgba(232,232,240,0.45);
+            --danger: #ff3355;
+            --success:#00ff88;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            min-height: 100vh;
+            padding: 0 0 60px;
+        }
+
+        /* ── Header ── */
+        .hdr {
+            background: rgba(10,10,24,0.95);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(12px);
+        }
+        .hdr-hex {
+            width: 36px; height: 36px;
+            background: linear-gradient(135deg, var(--neon), var(--purple));
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1rem; color: #000;
+        }
+        .hdr-title { font-family: 'Orbitron', sans-serif; font-size: 0.85rem; font-weight: 700; color: var(--neon); }
+        .hdr-sub   { font-size: 0.6rem; color: var(--muted); letter-spacing: 1px; }
+        .hdr-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+        .hdr-btn {
+            background: rgba(0,255,204,0.07); border: 1px solid var(--border);
+            color: var(--text); border-radius: 8px; padding: 6px 12px;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .hdr-btn:hover { background: rgba(0,255,204,0.15); color: var(--neon); }
+        #userBadge { font-size: 0.65rem; color: var(--muted); }
+
+        /* ── Layout ── */
+        .container { max-width: 700px; margin: 0 auto; padding: 24px 16px; }
+
+        /* ── Login card ── */
+        .login-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px 24px;
+            text-align: center;
+            margin-top: 60px;
+        }
+        .login-card h2 { font-family: 'Orbitron', sans-serif; color: var(--neon); margin-bottom: 20px; font-size: 1rem; }
+
+        /* ── Section card ── */
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.72rem;
+            color: var(--neon);
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .card-title i { opacity: 0.7; }
+
+        /* ── Fields ── */
+        .field { margin-bottom: 14px; }
+        .field label { display: block; font-size: 0.6rem; color: var(--muted); letter-spacing: 1px; margin-bottom: 5px; }
+        .field input, .field select, .field textarea {
+            width: 100%;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            padding: 10px 12px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .field input:focus, .field select:focus, .field textarea:focus {
+            border-color: var(--neon);
+        }
+        .field textarea { resize: vertical; min-height: 70px; }
+        .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        /* ── Buttons ── */
+        .btn {
+            background: linear-gradient(135deg, var(--neon), var(--neon2));
+            color: #000; border: none; border-radius: 10px;
+            font-family: 'Orbitron', sans-serif; font-size: 0.7rem; font-weight: 700;
+            padding: 11px 20px; cursor: pointer; width: 100%;
+            transition: all 0.2s; letter-spacing: 0.5px;
+        }
+        .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 0 18px rgba(0,255,204,0.35); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-sec {
+            background: transparent; border: 1px solid var(--border);
+            color: var(--text);
+        }
+        .btn-sec:hover { background: rgba(255,255,255,0.05); }
+        .btn-danger { background: linear-gradient(135deg, var(--danger), #ff6b35); color: #fff; }
+
+        /* ── File list ── */
+        .file-list { display: flex; flex-direction: column; gap: 10px; }
+        .file-item {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            display: flex; align-items: center; gap: 12px;
+            position: relative;
+        }
+        .file-thumb {
+            width: 48px; height: 48px; border-radius: 8px;
+            object-fit: cover; background: rgba(255,255,255,0.06);
+            flex-shrink: 0;
+        }
+        .file-thumb-icon {
+            width: 48px; height: 48px; border-radius: 8px;
+            background: rgba(0,255,204,0.07);
+            display: flex; align-items: center; justify-content: center;
+            color: var(--neon); font-size: 1.2rem; flex-shrink: 0;
+        }
+        .file-info { flex: 1; min-width: 0; }
+        .file-name { font-size: 0.75rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .file-meta { font-size: 0.6rem; color: var(--muted); margin-top: 2px; }
+        .file-badge-src {
+            font-size: 0.55rem; padding: 2px 6px; border-radius: 4px;
+            background: rgba(66,133,244,0.2); color: #6ea8fe; border: 1px solid rgba(66,133,244,0.3);
+            white-space: nowrap;
+        }
+        .file-actions { display: flex; gap: 6px; }
+        .fa-btn {
+            background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+            color: var(--muted); border-radius: 6px; padding: 5px 8px;
+            cursor: pointer; font-size: 0.7rem; transition: all 0.15s;
+        }
+        .fa-btn:hover { color: var(--neon); border-color: var(--neon); }
+        .fa-btn.del:hover { color: var(--danger); border-color: var(--danger); }
+
+        /* ── Toast ── */
+        .toast-stack { position: fixed; bottom: 20px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+        .toast {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 10px; padding: 10px 14px; font-size: 0.7rem;
+            display: flex; align-items: center; gap: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            animation: slideIn 0.25s ease;
+        }
+        .toast.success { border-color: var(--success); color: var(--success); }
+        .toast.error   { border-color: var(--danger);  color: var(--danger); }
+        .toast.info    { border-color: var(--neon);    color: var(--neon); }
+        @keyframes slideIn { from { transform: translateX(50px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* ── Spinner ── */
+        .spinner { display: inline-block; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Empty state ── */
+        .empty { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 0.72rem; }
+        .empty i { font-size: 2.5rem; display: block; margin-bottom: 12px; opacity: 0.3; }
+
+        /* ── Divider ── */
+        .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+        /* ── Stats row ── */
+        .stats-row { display: flex; gap: 10px; margin-bottom: 20px; }
+        .stat-pill {
+            flex: 1; background: rgba(0,255,204,0.06); border: 1px solid var(--border);
+            border-radius: 10px; padding: 10px 12px; text-align: center;
+        }
+        .stat-val { font-family: 'Orbitron', sans-serif; font-size: 1.1rem; color: var(--neon); }
+        .stat-lbl { font-size: 0.55rem; color: var(--muted); letter-spacing: 1px; margin-top: 2px; }
+
+        /* ── Tabs ── */
+        .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+        .tab {
+            flex: 1; padding: 8px; border-radius: 8px; text-align: center;
+            font-size: 0.65rem; letter-spacing: 0.5px; cursor: pointer;
+            border: 1px solid var(--border); color: var(--muted);
+            transition: all 0.2s; background: transparent;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .tab.active { background: rgba(0,255,204,0.1); border-color: var(--neon); color: var(--neon); }
+
+        /* ── Bulk paste ── */
+        .paste-hint { font-size: 0.6rem; color: var(--muted); margin-top: 6px; }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="hdr">
+    <div class="hdr-hex"><i class="fas fa-hard-drive"></i></div>
+    <div>
+        <div class="hdr-title">CSM DRIVE</div>
+        <div class="hdr-sub">GDRIVE ADMIN PANEL</div>
+    </div>
+    <div class="hdr-right">
+        <span id="userBadge">Not signed in</span>
+        <button class="hdr-btn" id="authBtn" onclick="handleAuth()">
+            <i class="fas fa-fingerprint"></i> Login
+        </button>
+    </div>
+</header>
+
+<!-- Toast container -->
+<div class="toast-stack" id="toastStack"></div>
+
+<!-- Main -->
+<div class="container">
+
+    <!-- Login gate -->
+    <div id="loginCard" class="login-card">
+        <h2><i class="fas fa-shield-halved"></i> AUTHENTICATE</h2>
+        <div class="field"><label>EMAIL</label><input type="email" id="loginEmail" placeholder="your@email.com" autocomplete="email"></div>
+        <div class="field"><label>PASSWORD</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password"></div>
+        <button class="btn" id="loginBtn" onclick="doLogin()"><i class="fas fa-fingerprint"></i> Sign In</button>
+    </div>
+
+    <!-- App content -->
+    <div id="appContent" style="display:none">
+
+        <!-- Stats -->
+        <div class="stats-row">
+            <div class="stat-pill"><div class="stat-val" id="statDrive">0</div><div class="stat-lbl">DRIVE FILES</div></div>
+            <div class="stat-pill"><div class="stat-val" id="statCloud">0</div><div class="stat-lbl">CLOUDINARY</div></div>
+            <div class="stat-pill"><div class="stat-val" id="statTotal">0</div><div class="stat-lbl">TOTAL</div></div>
+        </div>
+
+        <!-- Register single Drive file -->
+        <div class="card">
+            <div class="card-title"><i class="fab fa-google-drive"></i> REGISTER DRIVE FILE</div>
+            <p style="font-size:0.65rem;color:var(--muted);margin-bottom:16px;">
+                Upload a file to Google Drive manually, then register it here by its File ID.
+                The file must be shared with your service account email.
+            </p>
+
+            <div class="field">
+                <label>GOOGLE DRIVE FILE ID</label>
+                <input type="text" id="driveId" placeholder="e.g. 1aBcDeFgHiJkLmNoPqRsTuVwXyZ">
+                <div class="paste-hint">Copy from Drive URL: drive.google.com/file/d/<b>[THIS PART]</b>/view</div>
+            </div>
+            <div class="field-row">
+                <div class="field">
+                    <label>DISPLAY NAME</label>
+                    <input type="text" id="driveName" placeholder="My Photo">
+                </div>
+                <div class="field">
+                    <label>TYPE</label>
+                    <select id="driveType">
+                        <option value="image">Image</option>
+                        <option value="video">Video</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field-row">
+                <div class="field">
+                    <label>SIZE (optional)</label>
+                    <input type="text" id="driveSize" placeholder="e.g. 3.2 MB">
+                </div>
+                <div class="field">
+                    <label>FOLDER ID (optional)</label>
+                    <select id="driveFolder"><option value="">No Folder</option></select>
+                </div>
+            </div>
+            <div class="field">
+                <label>THUMBNAIL URL (optional — paste a public preview URL)</label>
+                <input type="text" id="driveThumbnail" placeholder="https://drive.google.com/thumbnail?id=...">
+                <div class="paste-hint">Leave blank to auto-fetch via Worker. Or use: https://drive.google.com/thumbnail?id=FILE_ID&sz=w400</div>
+            </div>
+
+            <button class="btn" id="registerBtn" onclick="registerDriveFile()">
+                <i class="fas fa-plus-circle"></i> Register File
+            </button>
+        </div>
+
+        <!-- Bulk register -->
+        <div class="card">
+            <div class="card-title"><i class="fas fa-list"></i> BULK REGISTER (JSON)</div>
+            <p style="font-size:0.65rem;color:var(--muted);margin-bottom:12px;">
+                Paste a JSON array to register multiple files at once.
+            </p>
+            <div class="field">
+                <label>JSON ARRAY</label>
+                <textarea id="bulkJson" placeholder='[
+  { "drive_id": "1aBc...", "name": "Photo 1", "cat": "image", "size": "2.1 MB" },
+  { "drive_id": "2xYz...", "name": "Video 1", "cat": "video", "size": "45 MB" }
+]'></textarea>
+            </div>
+            <button class="btn btn-sec" onclick="bulkRegister()">
+                <i class="fas fa-database"></i> Bulk Register
+            </button>
+        </div>
+
+        <!-- File list -->
+        <div class="card">
+            <div class="card-title"><i class="fas fa-layer-group"></i> REGISTERED FILES</div>
+            <div class="tabs">
+                <button class="tab active" onclick="setTab('all', this)">All</button>
+                <button class="tab" onclick="setTab('gdrive', this)">Drive</button>
+                <button class="tab" onclick="setTab('cloudinary', this)">Cloudinary</button>
+            </div>
+            <div id="fileList" class="file-list">
+                <div class="empty"><i class="fas fa-ghost"></i>Loading…</div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- Firebase + App Script -->
+<script type="module">
+import { initializeApp }        from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+                                from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+import { getFirestore, collection, doc, addDoc, getDocs, deleteDoc, onSnapshot,
+         serverTimestamp, query, orderBy }
+                                from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+const firebaseConfig = {
+    apiKey:      "AIzaSyBtmUmV1KxQDB0jN9gUQnh-eYWKllMPav0",
+    authDomain:  "photos-58c8e.firebaseapp.com",
+    projectId:   "photos-58c8e",
+};
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+const FILES_COL   = "files";
+const FOLDERS_COL = "folders";
+
+let allFiles  = [];
+let folders   = [];
+let activeTab = 'all';
+
+// ── Auth state ──────────────────────────────────────────────────
+onAuthStateChanged(auth, user => {
+    if (user) {
+        document.getElementById('loginCard').style.display  = 'none';
+        document.getElementById('appContent').style.display = 'block';
+        document.getElementById('userBadge').textContent    = user.email;
+        document.getElementById('authBtn').innerHTML = '<i class="fas fa-right-from-bracket"></i> Logout';
+        subscribeData();
+    } else {
+        document.getElementById('loginCard').style.display  = 'block';
+        document.getElementById('appContent').style.display = 'none';
+        document.getElementById('userBadge').textContent    = 'Not signed in';
+        document.getElementById('authBtn').innerHTML = '<i class="fas fa-fingerprint"></i> Login';
+    }
+});
+
+// ── Login / Logout ──────────────────────────────────────────────
+window.handleAuth = () => {
+    if (auth.currentUser) signOut(auth);
+};
+window.doLogin = async () => {
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spinner"></i> Signing in…';
+    try {
+        await signInWithEmailAndPassword(auth,
+            document.getElementById('loginEmail').value,
+            document.getElementById('loginPass').value);
+    } catch (e) {
+        toast('Login failed: ' + e.message, 'error');
+    }
+    btn.disabled = false; btn.innerHTML = '<i class="fas fa-fingerprint"></i> Sign In';
+};
+document.getElementById('loginPass').addEventListener('keydown', e => {
+    if (e.key === 'Enter') window.doLogin();
+});
+
+// ── Subscribe to Firestore ──────────────────────────────────────
+function subscribeData() {
+    const q = query(collection(db, FILES_COL), orderBy('time', 'desc'));
+    onSnapshot(q, snap => {
+        allFiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        updateStats();
+        renderFiles();
+    });
+
+    onSnapshot(collection(db, FOLDERS_COL), snap => {
+        folders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        updateFolderSelect();
+    });
+}
+
+function updateFolderSelect() {
+    const sel = document.getElementById('driveFolder');
+    sel.innerHTML = '<option value="">No Folder</option>';
+    folders.forEach(f => sel.innerHTML += `<option value="${f.id}">${f.name}</option>`);
+}
+
+function updateStats() {
+    const drive = allFiles.filter(f => f.source === 'gdrive').length;
+    const cloud = allFiles.filter(f => f.source === 'cloudinary' || !f.source).length;
+    document.getElementById('statDrive').textContent = drive;
+    document.getElementById('statCloud').textContent = cloud;
+    document.getElementById('statTotal').textContent = allFiles.length;
+}
+
+// ── Tab ─────────────────────────────────────────────────────────
+window.setTab = (tab, el) => {
+    activeTab = tab;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    renderFiles();
+};
+
+// ── Render file list ────────────────────────────────────────────
+function renderFiles() {
+    const list = document.getElementById('fileList');
+    let filtered = allFiles;
+    if (activeTab === 'gdrive')     filtered = allFiles.filter(f => f.source === 'gdrive');
+    if (activeTab === 'cloudinary') filtered = allFiles.filter(f => f.source === 'cloudinary' || !f.source);
+
+    if (!filtered.length) {
+        list.innerHTML = `<div class="empty"><i class="fas fa-ghost"></i>No files here</div>`;
+        return;
+    }
+
+    list.innerHTML = filtered.map(f => {
+        const isGDrive  = f.source === 'gdrive';
+        const thumb     = f.thumbnail || '';
+        const thumbHtml = thumb
+            ? `<img class="file-thumb" src="${thumb}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+            : '';
+        const iconHtml  = `<div class="file-thumb-icon" style="${thumb?'display:none':''}"><i class="fas fa-${f.cat==='video'?'video':'image'}"></i></div>`;
+        const fo        = folders.find(x => x.id === f.folder);
+        const date      = f.time ? new Date(f.time).toLocaleDateString() : '—';
+
+        return `<div class="file-item">
+            ${thumbHtml}${iconHtml}
+            <div class="file-info">
+                <div class="file-name">${f.name || 'Untitled'}</div>
+                <div class="file-meta">
+                    <span class="file-badge-src">${isGDrive ? '🔵 DRIVE' : '☁️ CLOUDINARY'}</span>
+                    &nbsp;${f.size||'—'} · ${date}
+                    ${fo ? `· 📁 ${fo.name}` : ''}
+                    ${isGDrive ? `<br><span style="font-size:0.55rem;color:var(--muted)">${f.drive_id}</span>` : ''}
+                </div>
+            </div>
+            <div class="file-actions">
+                <button class="fa-btn del" onclick="window.deleteFile('${f.id}','${f.name||''}')" title="Delete"><i class="fas fa-trash"></i></button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ── Register single Drive file ──────────────────────────────────
+window.registerDriveFile = async () => {
+    const driveId   = document.getElementById('driveId').value.trim();
+    const name      = document.getElementById('driveName').value.trim() || driveId;
+    const cat       = document.getElementById('driveType').value;
+    const size      = document.getElementById('driveSize').value.trim();
+    const folder    = document.getElementById('driveFolder').value;
+    const thumbnail = document.getElementById('driveThumbnail').value.trim();
+
+    if (!driveId) { toast('Enter a Drive File ID', 'error'); return; }
+
+    const btn = document.getElementById('registerBtn');
+    btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spinner"></i> Registering…';
+
+    try {
+        // Auto-generate thumbnail URL if not provided
+        const thumbUrl = thumbnail || `https://drive.google.com/thumbnail?id=${driveId}&sz=w400`;
+
+        await addDoc(collection(db, FILES_COL), {
+            source:    'gdrive',
+            drive_id:  driveId,
+            thumbnail: thumbUrl,
+            cat,
+            name,
+            size:      size || '—',
+            folder:    folder || '',
+            time:      Date.now(),
+            starred:   false,
+            locked:    false,
+            trash:     false,
+            uploadedAt: serverTimestamp()
+        });
+
+        toast(`"${name}" registered!`, 'success');
+
+        // Clear fields
+        document.getElementById('driveId').value       = '';
+        document.getElementById('driveName').value     = '';
+        document.getElementById('driveSize').value     = '';
+        document.getElementById('driveThumbnail').value= '';
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+
+    btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus-circle"></i> Register File';
+};
+
+// ── Bulk register ───────────────────────────────────────────────
+window.bulkRegister = async () => {
+    const raw = document.getElementById('bulkJson').value.trim();
+    let items;
+    try {
+        items = JSON.parse(raw);
+        if (!Array.isArray(items)) throw new Error('Must be a JSON array');
+    } catch (e) {
+        toast('Invalid JSON: ' + e.message, 'error');
+        return;
+    }
+
+    toast(`Registering ${items.length} files…`, 'info');
+    let ok = 0, fail = 0;
+
+    for (const item of items) {
+        if (!item.drive_id) { fail++; continue; }
+        try {
+            const thumbUrl = item.thumbnail || `https://drive.google.com/thumbnail?id=${item.drive_id}&sz=w400`;
+            await addDoc(collection(db, FILES_COL), {
+                source:    'gdrive',
+                drive_id:  item.drive_id,
+                thumbnail: thumbUrl,
+                cat:       item.cat || 'image',
+                name:      item.name || item.drive_id,
+                size:      item.size || '—',
+                folder:    item.folder || '',
+                time:      Date.now(),
+                starred:   false, locked: false, trash: false,
+                uploadedAt: serverTimestamp()
+            });
+            ok++;
+        } catch (e) { fail++; }
+    }
+
+    toast(`Done: ${ok} registered, ${fail} failed`, ok > 0 ? 'success' : 'error');
+    if (ok > 0) document.getElementById('bulkJson').value = '';
+};
+
+// ── Delete file ─────────────────────────────────────────────────
+window.deleteFile = async (id, name) => {
+    if (!confirm(`Delete "${name || id}" from Firestore?\n(This only removes the metadata, not the actual file.)`)) return;
+    try {
+        await deleteDoc(doc(db, FILES_COL, id));
+        toast(`Deleted "${name}"`, 'info');
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+};
+
+// ── Toast ───────────────────────────────────────────────────────
+window.toast = function(msg, type = 'info') {
+    const stack = document.getElementById('toastStack');
+    const el    = document.createElement('div');
+    el.className = `toast ${type}`;
+    const icons  = { success:'check-circle', error:'circle-exclamation', info:'circle-info' };
+    el.innerHTML = `<i class="fas fa-${icons[type]||'circle-info'}"></i> ${msg}`;
+    stack.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, 3500);
+};
+
+function toast(msg, type) { window.toast(msg, type); }
+</script>
+
+</body>
+</html>
