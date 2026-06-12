@@ -30,7 +30,7 @@ const db    = getFirestore(fbApp);
 
 /* ─── Cloudflare Worker URL ─────────────────────────────────── */
 // Replace with your deployed worker URL after deploying worker.js
-const WORKER_URL = "https://csm-drive-proxy.YOUR_SUBDOMAIN.workers.dev";
+const WORKER_URL = "httpas://csm-drive-proxy.csm-mohasin.workers.dev";
 
 /* ─── Firestore collection paths ────────────────────────────── */
 const FILES_COL    = "files";
