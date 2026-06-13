@@ -15,7 +15,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 /* তোমার Worker URL */
-const WORKER_URL = "https://csm-drive-proxy.YOUR_SUBDOMAIN.workers.dev"; 
+const WORKER_URL = "https://small-pine-55ff.csm-mohasin.workers.dev"; 
 
 let allFiles = [];
 
