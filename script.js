@@ -13,7 +13,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const WORKER_URL = "https://csm-drive-proxy.YOUR_SUBDOMAIN.workers.dev"; // ← এটা ঠিক করো
+const WORKER_URL = "https://small-pine-55ff.csm-mohasin.workers.dev"; // ← এটা ঠিক করো
 
 let allFiles = [];
 
