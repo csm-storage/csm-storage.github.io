@@ -44,7 +44,7 @@ const ACCOUNTS_PATH = 'cloudinary_accounts';
    Cloudinary, so the Worker can pick the right account and keep
    API secrets off the browser. Set this to YOUR deployed Worker URL
    (see the deployment guide) — e.g. "https://csm-drive-worker.you.workers.dev" */
-const WORKER_URL = 'https://csm-drive-worker.YOUR-SUBDOMAIN.workers.dev';
+const WORKER_URL = 'https://backend.csm-mohasin.workers.dev';
 
 /** Always fetches a fresh Firebase ID token (auto-refreshes silently
  *  since login is persistent — this is exactly the flow the security
