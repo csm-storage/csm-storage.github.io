@@ -21,7 +21,7 @@
  */
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, getIdToken } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
 import { getDatabase, ref, push, set, onValue, remove, update } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
 /* ─── Firebase config ───────────────────────────────────────── */
@@ -37,6 +37,70 @@ const db    = getDatabase(fbApp);
 const DB_PATH       = 'my_gallery';
 const FOLDERS_PATH  = 'folders';
 const SETTINGS_PATH = 'settings';
+const ACCOUNTS_PATH = 'cloudinary_accounts';
+
+/* ─── Multi-Cloudinary Worker (backend brain) ──────────────────
+   Uploads/deletes go through this Worker instead of straight to
+   Cloudinary, so the Worker can pick the right account and keep
+   API secrets off the browser. Set this to YOUR deployed Worker URL
+   (see the deployment guide) — e.g. "https://csm-drive-worker.you.workers.dev" */
+const WORKER_URL = 'https://csm-drive-worker.YOUR-SUBDOMAIN.workers.dev';
+
+/** Always fetches a fresh Firebase ID token (auto-refreshes silently
+ *  since login is persistent — this is exactly the flow the security
+ *  design calls for, no manual re-login needed). */
+async function getAuthToken() {
+    if (!auth.currentUser) throw new Error('Not signed in');
+    return getIdToken(auth.currentUser, /* forceRefresh */ false);
+}
+
+/* ─── Cloudinary account usage (for the Settings panel) ────────── */
+let cloudinaryAccounts = {};
+function loadCloudinaryAccounts() {
+    onValue(ref(db, ACCOUNTS_PATH), snap => {
+        cloudinaryAccounts = snap.val() || {};
+        renderAccountUsage();
+    });
+}
+function renderAccountUsage() {
+    const wrap = document.getElementById('cloudAccountsPanel');
+    if (!wrap) return;
+    const ids = Object.keys(cloudinaryAccounts);
+    if (!ids.length) {
+        wrap.innerHTML = `<div class="acct-empty">No Cloudinary accounts registered yet — see the deployment guide.</div>`;
+        return;
+    }
+    wrap.innerHTML = ids.map(id => {
+        const a = cloudinaryAccounts[id];
+        const used  = Number(a.used_mb)  || 0;
+        const limit = Number(a.limit_mb) || 1;
+        const pct   = Math.min(used / limit * 100, 100);
+        const level = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'ok';
+        return `
+        <div class="acct-row">
+            <div class="acct-row-top">
+                <span class="acct-name">${a.label || id}</span>
+                <span class="acct-pct acct-${level}">${pct.toFixed(1)}%</span>
+            </div>
+            <div class="acct-bar-wrap"><div class="acct-bar acct-bar-${level}" style="width:${pct}%"></div></div>
+            <div class="acct-sub">${(used/1024).toFixed(2)} GB / ${(limit/1024).toFixed(2)} GB — ${a.cloud_name || id}</div>
+        </div>`;
+    }).join('');
+}
+window.syncCloudUsage = async () => {
+    try {
+        const token = await getAuthToken();
+        const res = await fetch(`${WORKER_URL}/cloudinary/sync-usage`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Sync failed');
+        showToast('Usage recalculated from Cloudinary', 'success');
+    } catch (e) {
+        showToast(`Sync failed: ${e.message}`, 'error');
+    }
+};
 
 /* ─── App State ─────────────────────────────────────────────── */
 let allFiles        = [];
@@ -272,6 +336,7 @@ onAuthStateChanged(auth, async user => {
             showMain();
             loadData(); loadFolders(); loadSettings();
         }
+        loadCloudinaryAccounts();
 
         setTimeout(() => {
             if (navigator.onLine) { processSyncQueue(); processUploadQueue(); }
@@ -464,7 +529,10 @@ async function processSyncQueue() {
     for (const item of items) {
         try {
             if (item.type === 'update') await update(ref(db, `${DB_PATH}/${item.id}`), item.data);
-            if (item.type === 'delete') await remove(ref(db, `${DB_PATH}/${item.id}`));
+            if (item.type === 'delete') {
+                if (item.cloud) { try { await deleteFromCloudinary(item.cloud); } catch (e) { console.warn('[Sync] Cloud delete failed:', e); } }
+                await remove(ref(db, `${DB_PATH}/${item.id}`));
+            }
             if (item.type === 'create') await set(ref(db, `${DB_PATH}/${item.id}`), item.data);
             if (item.type === 'folderCreate') await set(ref(db, `${FOLDERS_PATH}/${item.id}`), item.data);
             if (item.type === 'folderDelete') await remove(ref(db, `${FOLDERS_PATH}/${item.id}`));
@@ -507,14 +575,22 @@ async function processUploadQueue() {
 }
 
 async function uploadQueuedItem(file, customName, folder) {
+    const token = await getAuthToken();
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('upload_preset', 'github_unsigned');
-    const res  = await fetch('https://api.cloudinary.com/v1_1/dgxbcqtly/auto/upload', { method: 'POST', body: fd });
+    const res = await fetch(`${WORKER_URL}/cloudinary/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: fd
+    });
     const data = await res.json();
-    const isVid = file.type.startsWith('video');
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    const isVid = data.resourceType === 'video';
     const rec = {
-        url:     data.secure_url,
+        url:          data.secure_url,
+        publicId:     data.publicId,
+        account:      data.account,
+        resourceType: data.resourceType,
         cat:     isVid ? 'video' : 'image',
         name:    customName || file.name.replace(/\.[^.]+$/, ''),
         size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
@@ -524,6 +600,7 @@ async function uploadQueuedItem(file, customName, folder) {
     };
     const newRef = push(ref(db, DB_PATH));
     await set(newRef, rec);
+    if (data.nearCapacity) showToast('A Cloudinary account is nearing capacity', 'warning');
 }
 
 function updateUploadQueueBadge() {
@@ -914,22 +991,29 @@ window.startUpload = async () => {
     if (!pendingUploadFiles.length) setTimeout(() => window.toggleUploadPanel(), 1000);
 };
 
-function uploadSingleFile(file, customName, folder, onProgress) {
+async function uploadSingleFile(file, customName, folder, onProgress) {
+    const token = await getAuthToken();
     return new Promise((resolve, reject) => {
         const fd = new FormData();
         fd.append('file', file);
-        fd.append('upload_preset', 'github_unsigned');
         const xhr = new XMLHttpRequest();
+        // Progress reflects the browser → Worker leg. The Worker → Cloudinary
+        // leg (plus the Firebase usage update) happens after that reaches
+        // 90%, so we hold at 90% until the response comes back.
         xhr.upload.onprogress = e => {
             if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 90));
         };
         xhr.onload = async () => {
+            let data;
+            try { data = JSON.parse(xhr.responseText); } catch { data = {}; }
             if (xhr.status >= 200 && xhr.status < 300) {
-                const data = JSON.parse(xhr.responseText);
                 onProgress(95);
-                const isVid = file.type.startsWith('video');
+                const isVid = data.resourceType === 'video';
                 const rec = {
-                    url:     data.secure_url,
+                    url:          data.secure_url,
+                    publicId:     data.publicId,
+                    account:      data.account,
+                    resourceType: data.resourceType,
                     cat:     isVid ? 'video' : 'image',
                     name:    customName || file.name.replace(/\.[^.]+$/, ''),
                     size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
@@ -940,11 +1024,13 @@ function uploadSingleFile(file, customName, folder, onProgress) {
                 const newRef = push(ref(db, DB_PATH));
                 await set(newRef, rec);
                 onProgress(100);
+                if (data.nearCapacity) showToast('A Cloudinary account is nearing capacity', 'warning');
                 resolve();
-            } else reject(new Error(xhr.statusText));
+            } else reject(new Error(data.error || xhr.statusText));
         };
         xhr.onerror = () => reject(new Error('Network error'));
-        xhr.open('POST', 'https://api.cloudinary.com/v1_1/dgxbcqtly/auto/upload');
+        xhr.open('POST', `${WORKER_URL}/cloudinary/upload`);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         xhr.send(fd);
     });
 }
@@ -1012,6 +1098,28 @@ window.restoreFile = async id => {
     showToast('File restored', 'success');
 };
 
+/** Deletes a file's actual media from Cloudinary via the Worker
+ *  (using its own account + publicId), so storage is really reclaimed
+ *  and the account's usage counter stays accurate. Files uploaded
+ *  before this system existed have no publicId/account — those are
+ *  skipped here and just removed from the gallery as before. */
+async function deleteFromCloudinary(file) {
+    if (!file?.publicId || !file?.account) return; // legacy record, nothing to reclaim
+    const token = await getAuthToken();
+    const res = await fetch(`${WORKER_URL}/cloudinary/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+            publicId:     file.publicId,
+            account:      file.account,
+            resourceType: file.resourceType || (file.cat === 'video' ? 'video' : 'image'),
+            sizeMb:       parseFloat(file.size) || 0
+        })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Cloud delete failed');
+}
+
 window.permanentDelete = id => {
     showModal({
         title: 'DELETE FOREVER',
@@ -1020,8 +1128,14 @@ window.permanentDelete = id => {
             { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
             { label: 'Delete Forever', cls: 'modal-btn-danger', action: async () => {
                 closeModal();
-                if (navigator.onLine) { await remove(ref(db, `${DB_PATH}/${id}`)); }
-                else { await addToSyncQueue({ type: 'delete', id }); }
+                const file = allFiles.find(f => f.id === id);
+                if (navigator.onLine) {
+                    try { await deleteFromCloudinary(file); }
+                    catch (e) { showToast(`Could not delete from cloud: ${e.message}`, 'error'); return; }
+                    await remove(ref(db, `${DB_PATH}/${id}`));
+                } else {
+                    await addToSyncQueue({ type: 'delete', id, cloud: file });
+                }
                 allFiles = allFiles.filter(f => f.id !== id);
                 await idbDelete('files', id);
                 updateStats(); render();
@@ -1176,8 +1290,12 @@ window.purgeTrash = () => {
                 closeModal();
                 const trashed = allFiles.filter(f => f.trash);
                 for (const f of trashed) {
-                    if (navigator.onLine) await remove(ref(db, `${DB_PATH}/${f.id}`));
-                    else await addToSyncQueue({ type: 'delete', id: f.id });
+                    if (navigator.onLine) {
+                        try { await deleteFromCloudinary(f); } catch (e) { console.warn('[Trash] Cloud delete failed:', e); }
+                        await remove(ref(db, `${DB_PATH}/${f.id}`));
+                    } else {
+                        await addToSyncQueue({ type: 'delete', id: f.id, cloud: f });
+                    }
                     await idbDelete('files', f.id);
                 }
                 allFiles = allFiles.filter(f => !f.trash);
@@ -1308,8 +1426,13 @@ window.multiPermanentDelete = () => {
             { label: 'Delete All', cls: 'modal-btn-danger', action: async () => {
                 closeModal();
                 for (const id of selectedIds) {
-                    if (navigator.onLine) await remove(ref(db, `${DB_PATH}/${id}`));
-                    else await addToSyncQueue({ type:'delete', id });
+                    const file = allFiles.find(f => f.id === id);
+                    if (navigator.onLine) {
+                        try { await deleteFromCloudinary(file); } catch (e) { console.warn('[MultiDelete] Cloud delete failed:', e); }
+                        await remove(ref(db, `${DB_PATH}/${id}`));
+                    } else {
+                        await addToSyncQueue({ type:'delete', id, cloud: file });
+                    }
                     allFiles = allFiles.filter(f => f.id !== id);
                     await idbDelete('files', id);
                 }

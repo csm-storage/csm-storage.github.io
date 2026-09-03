@@ -417,6 +417,42 @@ a { text-decoration: none; }
     box-shadow: 0 0 8px rgba(0,255,204,0.3);
 }
 
+/* ── Cloud accounts (multi-Cloudinary usage) ───────────────────── */
+.cloud-accounts-section { padding: 0 20px 10px; }
+.cloud-accounts-hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-display); font-size: 0.7rem; letter-spacing: 1px;
+    color: var(--text-muted); margin-bottom: 8px;
+}
+.cloud-accounts-hdr i { color: var(--neon); margin-right: 4px; }
+.cloud-sync-btn {
+    background: var(--surface); border: 1px solid var(--border2);
+    color: var(--text-muted); border-radius: 8px;
+    padding: 5px 10px; font-size: 0.65rem; cursor: pointer;
+    display: flex; align-items: center; gap: 5px;
+    transition: var(--transition);
+}
+.cloud-sync-btn:hover { color: var(--neon); border-color: var(--border); }
+.cloud-accounts-panel { display: flex; gap: 10px; flex-wrap: wrap; }
+.acct-empty { font-size: 0.75rem; color: var(--text-muted); padding: 10px 2px; }
+.acct-row {
+    flex: 1; min-width: 180px;
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: var(--radius); padding: 10px 12px;
+}
+.acct-row-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.acct-name { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text); }
+.acct-pct { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; }
+.acct-ok      { color: var(--neon); }
+.acct-warning { color: var(--warning); }
+.acct-danger  { color: var(--danger); }
+.acct-bar-wrap { height: 5px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; }
+.acct-bar { height: 100%; border-radius: 3px; transition: width 0.8s cubic-bezier(0.22,1,0.36,1); }
+.acct-bar-ok      { background: linear-gradient(90deg, var(--neon), var(--neon2)); }
+.acct-bar-warning { background: linear-gradient(90deg, var(--warning), #ff7a00); }
+.acct-bar-danger  { background: linear-gradient(90deg, var(--danger), #ff6680); }
+.acct-sub { font-size: 0.62rem; color: var(--text-dim); margin-top: 5px; font-family: var(--font-mono); }
+
 /* ── Folder bar ─────────────────────────────────────────────── */
 .folder-section { padding: 0 20px 10px; }
 .folder-bar {
