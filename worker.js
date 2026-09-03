@@ -265,14 +265,32 @@ async function fbSet(path, value, idToken, env) {
  * is >=70%, fall back to whichever is least-full (still <100%) so
  * uploads keep working, and flag it as "near_capacity". If everything
  * is >=100%, refuse — the person needs to add another account.
+ *
+ * Accounts flagged `enabled: false` in Firebase (cloudinary_accounts/<id>)
+ * are removed from consideration entirely — this is how the Settings
+ * tab's "Enabled" toggle takes effect on the upload path.
+ *
+ * If `preferredId` is given (the user picked an explicit account in the
+ * upload popup instead of "Auto"), it's used as long as it's enabled and
+ * not already full — this is how "Default upload account" / manual
+ * account selection takes effect. Otherwise falls back to the automatic
+ * fill-in-order rule above.
  */
-function pickAccount(accountsConfig, usageData) {
-    const withRatio = accountsConfig.map(acc => {
-        const u = usageData?.[acc.id] || {};
-        const usedMb  = Number(u.used_mb)  || 0;
-        const limitMb = Number(u.limit_mb) || 20000; // fallback ~20GB if unset
-        return { ...acc, usedMb, limitMb, ratio: limitMb > 0 ? usedMb / limitMb : 1 };
-    });
+function pickAccount(accountsConfig, usageData, preferredId) {
+    const withRatio = accountsConfig
+        .map(acc => {
+            const u = usageData?.[acc.id] || {};
+            const usedMb  = Number(u.used_mb)  || 0;
+            const limitMb = Number(u.limit_mb) || 20000; // fallback ~20GB if unset
+            const enabled = u.enabled !== false; // default enabled when unset
+            return { ...acc, usedMb, limitMb, enabled, ratio: limitMb > 0 ? usedMb / limitMb : 1 };
+        })
+        .filter(a => a.enabled);
+
+    if (preferredId) {
+        const pref = withRatio.find(a => a.id === preferredId);
+        if (pref && pref.ratio < 1) return { account: pref, nearCapacity: pref.ratio >= USAGE_THRESHOLD };
+    }
 
     const underThreshold = withRatio.filter(a => a.ratio < USAGE_THRESHOLD);
     if (underThreshold.length) return { account: underThreshold[0], nearCapacity: false };
@@ -311,8 +329,14 @@ async function handleCloudinaryUpload(request, env) {
     try { accountsConfig = getCloudinaryAccounts(env); }
     catch (e) { return jsonResponse({ error: e.message }, 500, env); }
 
+    // Optional explicit account choice from the upload popup's account selector
+    // (empty/absent = "Auto", falls back to the fill-in-order rule).
+    const requestedAccountRaw = form.get('account');
+    const preferredId = typeof requestedAccountRaw === 'string' && requestedAccountRaw.trim()
+        ? requestedAccountRaw.trim() : null;
+
     const usageData = await fbGet('cloudinary_accounts', idToken, env);
-    const { account, nearCapacity } = pickAccount(accountsConfig, usageData);
+    const { account, nearCapacity } = pickAccount(accountsConfig, usageData, preferredId);
 
     if (!account) {
         return jsonResponse({

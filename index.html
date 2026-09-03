@@ -114,6 +114,9 @@
             <div id="syncStatusBadge" class="sync-badge" title="Sync Status">
                 <i class="fas fa-check-circle"></i> <span>SYNCED</span>
             </div>
+            <button class="hdr-btn" id="settingsBtn" onclick="window.openSettings()" title="Settings">
+                <i class="fas fa-gear"></i>
+            </button>
             <button class="hdr-btn" id="themeToggleBtn" onclick="window.toggleTheme()" title="Theme">
                 <i class="fas fa-circle-half-stroke"></i>
             </button>
@@ -154,15 +157,13 @@
         </div>
     </section>
 
-    <!-- Cloud accounts (multi-Cloudinary usage) -->
+    <!-- Cloud accounts (multi-Cloudinary usage) — full manager lives in Settings now -->
     <section class="cloud-accounts-section" data-aos data-aos-delay="100">
-        <div class="cloud-accounts-hdr">
-            <span><i class="fas fa-cloud"></i> Cloud Storage Accounts</span>
-            <button class="cloud-sync-btn" onclick="window.syncCloudUsage()" title="Recalculate from Cloudinary">
-                <i class="fas fa-rotate"></i> Recalculate
-            </button>
-        </div>
-        <div id="cloudAccountsPanel" class="cloud-accounts-panel"></div>
+        <button class="cloud-accounts-btn" onclick="window.openSettings('accounts')">
+            <span class="cab-left"><i class="fas fa-cloud"></i> Cloud Storage Accounts</span>
+            <span id="cloudAccountsSummary" class="cab-summary">—</span>
+            <i class="fas fa-chevron-right cab-chev"></i>
+        </button>
     </section>
 
     <!-- Folder bar -->
@@ -192,7 +193,7 @@
             <button id="listViewBtn" class="view-btn" onclick="window.setView('list')" title="List"><i class="fas fa-list"></i></button>
 
 
-<button class="upload-btn" onclick="window.open('https://csm-storage.github.io/upload', '_blank')" title="Upload">
+<button class="upload-btn" onclick="window.toggleUploadPanel()" title="Upload">
     <i class="fas fa-cloud-arrow-up"></i>
     <span>Upload</span>
     <span id="uploadQueueBadge" class="queue-badge hidden">0</span>
@@ -243,6 +244,7 @@
             <div class="up-meta">
                 <input type="text" id="uploadName" placeholder="Custom name (optional)">
                 <select id="uploadFolder"><option value="">No Folder</option></select>
+                <select id="uploadAccount" title="Cloud account to upload to"><option value="">⚡ Auto (recommended)</option></select>
             </div>
             <div id="uploadProgress" class="upload-progress hidden">
                 <div class="up-progress-label">
@@ -290,6 +292,50 @@
     </footer>
 
 </div><!-- /mainContent -->
+
+<!-- ─────────────────────── SETTINGS (full page) ──────────────── -->
+<div id="settingsOverlay" class="settings-overlay hidden">
+    <div class="settings-topbar">
+        <div class="settings-topbar-title"><i class="fas fa-gear"></i> SETTINGS</div>
+        <button class="settings-close" onclick="window.closeSettings()"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div class="settings-body">
+
+        <section class="settings-section">
+            <div class="settings-section-hdr"><span><i class="fas fa-shield-halved"></i> App Lock</span></div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Passcode lock</span>
+                    <span class="settings-row-sub">Require a 4-digit code when the app opens</span>
+                </div>
+                <label class="csm-switch">
+                    <input type="checkbox" id="passcodeEnabledToggle" onchange="window.setPasscodeEnabled(this.checked)">
+                    <span class="csm-switch-slider"></span>
+                </label>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Change passcode</span>
+                    <span class="settings-row-sub">Update your 4-digit access code</span>
+                </div>
+                <button class="settings-mini-btn" onclick="window.updatePasscode()"><i class="fas fa-key"></i> Change</button>
+            </div>
+        </section>
+
+        <section class="settings-section" id="settingsAccountsSection">
+            <div class="settings-section-hdr">
+                <span><i class="fas fa-cloud"></i> Cloud Storage Accounts</span>
+                <div class="settings-section-actions">
+                    <button class="settings-mini-btn" onclick="window.syncCloudUsage()" title="Recalculate from Cloudinary"><i class="fas fa-rotate"></i> Recalculate</button>
+                    <button class="settings-mini-btn accent" onclick="window.addAccountEntry()" title="Register another Cloudinary account"><i class="fas fa-plus"></i> Add</button>
+                </div>
+            </div>
+            <div class="settings-row-sub" style="padding:0 2px 10px;">Each photo/video's grid card shows a small number badge (top-right) marking which account it's stored on.</div>
+            <div id="settingsAccountsList" class="settings-accounts-list"></div>
+        </section>
+
+    </div>
+</div>
 
 <!-- NexusLightbox (zero CDN deps) -->
 <script src="lightbox.js"></script>

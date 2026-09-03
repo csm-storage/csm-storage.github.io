@@ -44,7 +44,7 @@ const ACCOUNTS_PATH = 'cloudinary_accounts';
    Cloudinary, so the Worker can pick the right account and keep
    API secrets off the browser. Set this to YOUR deployed Worker URL
    (see the deployment guide) — e.g. "https://csm-drive-worker.you.workers.dev" */
-const WORKER_URL = 'https://backend.csm-mohasin.workers.dev';
+const WORKER_URL = 'https://csm-drive-worker.YOUR-SUBDOMAIN.workers.dev';
 
 /** Always fetches a fresh Firebase ID token (auto-refreshes silently
  *  since login is persistent — this is exactly the flow the security
@@ -54,39 +54,233 @@ async function getAuthToken() {
     return getIdToken(auth.currentUser, /* forceRefresh */ false);
 }
 
-/* ─── Cloudinary account usage (for the Settings panel) ────────── */
+/* ─── Cloudinary account usage (for the Settings tab) ───────────── */
 let cloudinaryAccounts = {};
 function loadCloudinaryAccounts() {
     onValue(ref(db, ACCOUNTS_PATH), snap => {
         cloudinaryAccounts = snap.val() || {};
         renderAccountUsage();
+        render(); updateStats(); renderFolders(); // hidden/locked accounts can change what's visible
     });
 }
-function renderAccountUsage() {
-    const wrap = document.getElementById('cloudAccountsPanel');
-    if (!wrap) return;
-    const ids = Object.keys(cloudinaryAccounts);
-    if (!ids.length) {
-        wrap.innerHTML = `<div class="acct-empty">No Cloudinary accounts registered yet — see the deployment guide.</div>`;
-        return;
-    }
-    wrap.innerHTML = ids.map(id => {
-        const a = cloudinaryAccounts[id];
-        const used  = Number(a.used_mb)  || 0;
-        const limit = Number(a.limit_mb) || 1;
-        const pct   = Math.min(used / limit * 100, 100);
-        const level = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'ok';
-        return `
-        <div class="acct-row">
-            <div class="acct-row-top">
-                <span class="acct-name">${a.label || id}</span>
-                <span class="acct-pct acct-${level}">${pct.toFixed(1)}%</span>
-            </div>
-            <div class="acct-bar-wrap"><div class="acct-bar acct-bar-${level}" style="width:${pct}%"></div></div>
-            <div class="acct-sub">${(used/1024).toFixed(2)} GB / ${(limit/1024).toFixed(2)} GB — ${a.cloud_name || id}</div>
-        </div>`;
-    }).join('');
+
+/** Accounts in a stable display order — this order is what the #N badge
+ *  on each card and the "#N" label in Settings refer to. */
+function getSortedAccountIds() {
+    return Object.keys(cloudinaryAccounts).sort((a, b) => a.localeCompare(b));
 }
+function isAcctHidden(file) { return !!(file?.account && cloudinaryAccounts[file.account]?.hidden); }
+function isAcctLocked(file) { return !!(file?.account && cloudinaryAccounts[file.account]?.locked); }
+/** All files minus anything whose account is fully hidden — used everywhere
+ *  stats/folders/grids are computed so a hidden account truly disappears. */
+function nonHiddenFiles() { return allFiles.filter(f => !isAcctHidden(f)); }
+
+function renderAccountUsage() {
+    const ids = getSortedAccountIds();
+
+    // Slim summary button on the main page
+    const summaryEl = document.getElementById('cloudAccountsSummary');
+    if (summaryEl) {
+        if (!ids.length) {
+            summaryEl.textContent = 'No accounts yet';
+        } else {
+            let usedTotal = 0, limitTotal = 0, enabledCount = 0;
+            ids.forEach(id => {
+                const a = cloudinaryAccounts[id];
+                usedTotal  += Number(a.used_mb)  || 0;
+                limitTotal += Number(a.limit_mb) || 0;
+                if (a.enabled !== false) enabledCount++;
+            });
+            const pct = limitTotal ? (usedTotal / limitTotal * 100) : 0;
+            summaryEl.textContent = `${enabledCount}/${ids.length} active · ${pct.toFixed(0)}% used`;
+        }
+    }
+
+    renderSettingsAccounts(ids);
+}
+
+/** Full manager list rendered inside the Settings tab: usage bar, editable
+ *  label + limit, enable/disable, hide, lock, default-account radio, remove. */
+function renderSettingsAccounts(ids) {
+    ids = ids || getSortedAccountIds();
+    const wrap = document.getElementById('settingsAccountsList');
+    if (wrap) {
+        if (!ids.length) {
+            wrap.innerHTML = `<div class="acct-empty">No Cloudinary accounts registered yet — see the deployment guide.</div>`;
+        } else {
+            wrap.innerHTML = ids.map((id, idx) => {
+                const a       = cloudinaryAccounts[id];
+                const used    = Number(a.used_mb)  || 0;
+                const limit   = Number(a.limit_mb) || 1;
+                const pct     = Math.min(used / limit * 100, 100);
+                const level   = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'ok';
+                const enabled = a.enabled !== false;
+                const label   = (a.label || '').replace(/"/g, '&quot;');
+                return `
+                <div class="acct-manage-row ${!enabled ? 'disabled' : ''}">
+                    <div class="acct-manage-top">
+                        <span class="acct-manage-num">#${idx + 1}</span>
+                        <input class="acct-inline-input acct-label-input" value="${label}" placeholder="${id}"
+                            onchange="window.updateAccountField('${id}','label',this.value)">
+                        ${a.default
+                            ? `<span class="acct-default-tag"><i class="fas fa-star"></i> Default</span>`
+                            : `<button class="settings-mini-btn" onclick="window.setDefaultAccount('${id}')">Set Default</button>`}
+                    </div>
+                    <div class="acct-bar-wrap"><div class="acct-bar acct-bar-${level}" style="width:${pct}%"></div></div>
+                    <div class="acct-sub">${(used/1024).toFixed(2)} GB used · ${a.cloud_name || id} · <span class="acct-${level}">${pct.toFixed(1)}%</span></div>
+                    <div class="acct-manage-grid">
+                        <label class="acct-field">
+                            <span>LIMIT (MB)</span>
+                            <input type="number" min="1" value="${limit}"
+                                onchange="window.updateAccountField('${id}','limit_mb',Number(this.value)||1)">
+                        </label>
+                        <label class="acct-field acct-field-toggle">
+                            <span>ENABLED</span>
+                            <label class="csm-switch small">
+                                <input type="checkbox" ${enabled ? 'checked' : ''} onchange="window.updateAccountField('${id}','enabled',this.checked)">
+                                <span class="csm-switch-slider"></span>
+                            </label>
+                        </label>
+                        <label class="acct-field acct-field-toggle">
+                            <span>HIDE FILES</span>
+                            <label class="csm-switch small">
+                                <input type="checkbox" ${a.hidden ? 'checked' : ''} onchange="window.updateAccountField('${id}','hidden',this.checked)">
+                                <span class="csm-switch-slider"></span>
+                            </label>
+                        </label>
+                        <label class="acct-field acct-field-toggle">
+                            <span>LOCK FILES</span>
+                            <label class="csm-switch small">
+                                <input type="checkbox" ${a.locked ? 'checked' : ''} onchange="window.updateAccountField('${id}','locked',this.checked)">
+                                <span class="csm-switch-slider"></span>
+                            </label>
+                        </label>
+                    </div>
+                    <div class="acct-manage-actions">
+                        <button class="settings-mini-btn danger" onclick="window.deleteAccountEntry('${id}')"><i class="fas fa-trash"></i> Remove</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+    }
+
+    // Keep the upload popup's account selector in sync
+    const sel = document.getElementById('uploadAccount');
+    if (sel) {
+        const cur = sel.value;
+        let opts = `<option value="">⚡ Auto (recommended)</option>`;
+        ids.filter(id => cloudinaryAccounts[id].enabled !== false).forEach(id => {
+            const a = cloudinaryAccounts[id];
+            opts += `<option value="${id}">${(a.label || id)}${a.default ? ' ★ default' : ''}</option>`;
+        });
+        sel.innerHTML = opts;
+        const defId = ids.find(id => cloudinaryAccounts[id].default);
+        const stillValid = [...sel.options].some(o => o.value === cur);
+        sel.value = (cur && stillValid) ? cur : (defId || '');
+    }
+}
+
+/* ─── Settings tab (full-page) ───────────────────────────────────── */
+window.openSettings = (section) => {
+    document.getElementById('settingsOverlay').classList.remove('hidden');
+    const pt = document.getElementById('passcodeEnabledToggle');
+    if (pt) pt.checked = passcodeEnabled;
+    renderAccountUsage();
+    if (section === 'accounts') {
+        setTimeout(() => document.getElementById('settingsAccountsSection')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    }
+};
+window.closeSettings = () => {
+    document.getElementById('settingsOverlay').classList.add('hidden');
+};
+
+window.setPasscodeEnabled = val => {
+    passcodeEnabled = val;
+    if (navigator.onLine) update(ref(db, SETTINGS_PATH), { passcodeEnabled: val }).catch(() => {});
+    showToast(val ? 'Passcode lock enabled' : 'Passcode lock disabled', 'info');
+};
+
+/** Generic single-field save for an account entry — optimistic locally,
+ *  persisted to Firebase when online. Also re-renders the grid since
+ *  hidden/locked can change what's visible right away. */
+window.updateAccountField = (id, field, value) => {
+    if (!cloudinaryAccounts[id]) cloudinaryAccounts[id] = {};
+    cloudinaryAccounts[id][field] = value;
+    renderAccountUsage();
+    render(); updateStats(); renderFolders();
+    if (navigator.onLine) {
+        update(ref(db, `${ACCOUNTS_PATH}/${id}`), { [field]: value })
+            .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+    } else {
+        showToast('Offline — change will sync once online', 'warning');
+    }
+};
+
+window.setDefaultAccount = id => {
+    const ids = getSortedAccountIds();
+    const updates = {};
+    ids.forEach(aid => {
+        if (!cloudinaryAccounts[aid]) cloudinaryAccounts[aid] = {};
+        cloudinaryAccounts[aid].default = (aid === id);
+        updates[`${ACCOUNTS_PATH}/${aid}/default`] = (aid === id);
+    });
+    renderAccountUsage();
+    if (navigator.onLine) {
+        update(ref(db), updates).catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+    } else {
+        showToast('Offline — default will sync once online', 'warning');
+    }
+    showToast('Default upload account set', 'success');
+};
+
+window.deleteAccountEntry = id => {
+    const label = cloudinaryAccounts[id]?.label || id;
+    showModal({
+        title: 'REMOVE ACCOUNT',
+        body:  `Remove tracking for "${label}"? This only stops the app from tracking/uploading to it — it does NOT delete files already stored there, and does NOT remove it from the Worker's CLOUDINARY_ACCOUNTS secret.`,
+        btns:  [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: 'Remove', cls: 'modal-btn-danger', action: async () => {
+                closeModal();
+                delete cloudinaryAccounts[id];
+                renderAccountUsage();
+                if (navigator.onLine) await remove(ref(db, `${ACCOUNTS_PATH}/${id}`));
+                showToast('Account entry removed', 'info');
+            }}
+        ]
+    });
+};
+
+window.addAccountEntry = () => {
+    showModal({
+        title: 'ADD CLOUD ACCOUNT',
+        body: `<div style="display:flex;flex-direction:column;gap:10px;">
+            <input id="newAcctId" class="modal-input" style="margin-bottom:0" placeholder="Account ID — must match the Worker's CLOUDINARY_ACCOUNTS id (e.g. account3)">
+            <input id="newAcctLabel" class="modal-input" style="margin-bottom:0" placeholder="Display label (e.g. Backup Drive)">
+            <input id="newAcctCloud" class="modal-input" style="margin-bottom:0" placeholder="Cloudinary cloud name (for display only)">
+            <input id="newAcctLimit" type="number" class="modal-input" style="margin-bottom:0" placeholder="Limit in MB (e.g. 25000)">
+        </div>`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: 'Add', cls: 'modal-btn-confirm', action: async () => {
+                const id    = document.getElementById('newAcctId')?.value.trim();
+                const label = document.getElementById('newAcctLabel')?.value.trim();
+                const cloud = document.getElementById('newAcctCloud')?.value.trim();
+                const limit = Number(document.getElementById('newAcctLimit')?.value) || 20000;
+                if (!id) { showToast('Account ID is required', 'warning'); return; }
+                if (cloudinaryAccounts[id]) { showToast('That account ID already exists', 'warning'); return; }
+                closeModal();
+                const data = { label: label || id, cloud_name: cloud || '', limit_mb: limit, used_mb: 0, enabled: true, hidden: false, locked: false, default: false };
+                cloudinaryAccounts[id] = data;
+                renderAccountUsage();
+                if (navigator.onLine) await set(ref(db, `${ACCOUNTS_PATH}/${id}`), data);
+                showToast('Account added — also add it to the Worker CLOUDINARY_ACCOUNTS secret to enable uploads', 'success');
+            }}
+        ]
+    });
+};
+
 window.syncCloudUsage = async () => {
     try {
         const token = await getAuthToken();
@@ -551,6 +745,7 @@ async function addToPendingUploads(fileItem) {
     tx.objectStore('pendingUploads').add({
         b64, name: fileItem.file.name, type: fileItem.file.type,
         customName: fileItem.customName || '', folder: fileItem.folder || '',
+        account: fileItem.account || '',
         ts: Date.now()
     });
     if ('serviceWorker' in navigator && 'SyncManager' in window) {
@@ -566,7 +761,7 @@ async function processUploadQueue() {
         try {
             const blob   = await fetch(item.b64).then(r => r.blob());
             const file   = new File([blob], item.name, { type: item.type });
-            await uploadQueuedItem(file, item.customName, item.folder);
+            await uploadQueuedItem(file, item.customName, item.folder, item.account);
             await idbDelete('pendingUploads', item.uid);
         } catch (e) { console.warn('[Upload] Failed:', e); }
     }
@@ -574,10 +769,11 @@ async function processUploadQueue() {
     showToast('Offline uploads complete!', 'success');
 }
 
-async function uploadQueuedItem(file, customName, folder) {
+async function uploadQueuedItem(file, customName, folder, account) {
     const token = await getAuthToken();
     const fd = new FormData();
     fd.append('file', file);
+    if (account) fd.append('account', account);
     const res = await fetch(`${WORKER_URL}/cloudinary/upload`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
@@ -618,11 +814,12 @@ function updateUploadQueueBadge() {
 
 /* ─── Stats ──────────────────────────────────────────────────── */
 function updateStats() {
-    const active   = allFiles.filter(f => !f.trash);
+    const files    = nonHiddenFiles();
+    const active   = files.filter(f => !f.trash);
     const imgs     = active.filter(f => f.cat !== 'video').length;
     const vids     = active.filter(f => f.cat === 'video').length;
     const stars    = active.filter(f => f.starred).length;
-    const trashed  = allFiles.filter(f => f.trash).length;
+    const trashed  = files.filter(f => f.trash).length;
     const total    = Math.max(active.length, 1);
 
     document.getElementById('imgCount').textContent   = imgs;
@@ -636,20 +833,21 @@ function updateStats() {
     document.getElementById('trashBar').style.width = (trashed / Math.max(trashed + total, 1) * 100) + '%';
 
     let totalSize = 0;
-    allFiles.forEach(f => { if (f.size) totalSize += parseFloat(f.size); });
+    files.forEach(f => { if (f.size) totalSize += parseFloat(f.size); });
     const cap = 1024;
     document.getElementById('storageFill').style.width = Math.min(totalSize / cap * 100, 100) + '%';
-    document.getElementById('storageText').textContent = `${totalSize.toFixed(1)} MB / ${cap} MB (${allFiles.length} files)`;
+    document.getElementById('storageText').textContent = `${totalSize.toFixed(1)} MB / ${cap} MB (${files.length} files)`;
 }
 
 /* ─── Folders ────────────────────────────────────────────────── */
 function renderFolders() {
     const bar = document.getElementById('folderBar');
-    const allCount = allFiles.filter(f => !f.trash).length;
+    const files = nonHiddenFiles();
+    const allCount = files.filter(f => !f.trash).length;
     bar.innerHTML = `<div class="folder-pill ${currentFolder === 'all' ? 'active' : ''}" onclick="window.setFolder('all', this)">
         <i class="fas fa-folder"></i> All <span class="count">${allCount}</span></div>`;
     folders.forEach(f => {
-        const cnt = allFiles.filter(file => file.folder === f.id && !file.trash).length;
+        const cnt = files.filter(file => file.folder === f.id && !file.trash).length;
         bar.innerHTML += `<div class="folder-pill ${currentFolder === f.id ? 'active' : ''}"
             onclick="window.setFolder('${f.id}', this)"
             oncontextmenu="window.folderContext(event,'${f.id}')">
@@ -667,10 +865,10 @@ function updateFolderSelect() {
 
 /* ─── Visible files ──────────────────────────────────────────── */
 function getVisibleFiles() {
-    let list = allFiles.filter(f => {
+    let list = nonHiddenFiles().filter(f => {
         if (currentTab === 'trash')   return f.trash;
         if (currentTab === 'starred') return f.starred && !f.trash;
-        if (currentTab === 'locked')  return f.locked  && !f.trash;
+        if (currentTab === 'locked')  return (f.locked || isAcctLocked(f)) && !f.trash;
         if (currentTab === 'all')     return !f.trash;
         return f.cat === currentTab && !f.trash;
     });
@@ -738,13 +936,18 @@ function render() {
 
     const isOffline = !navigator.onLine;
     const lbItems   = buildLbItems(list);
+    const acctIds   = getSortedAccountIds();
 
     list.forEach((file, idx) => {
         let thumb = file.url || '';
         if (thumb.includes('/upload/')) thumb = thumb.replace('/upload/', '/upload/w_400,q_auto,f_auto/');
-        const thumbSrc = (isOffline && file.offlineData) ? file.offlineData : thumb;
-        const isVid    = file.cat === 'video';
-        const isLocked = file.locked && !file._unlocked;
+        const thumbSrc   = (isOffline && file.offlineData) ? file.offlineData : thumb;
+        const isVid      = file.cat === 'video';
+        const acctLocked = isAcctLocked(file);
+        const isLocked   = (file.locked || acctLocked) && !file._unlocked;
+        const acctIdx    = file.account ? acctIds.indexOf(file.account) : -1;
+        const acctNum    = acctIdx >= 0 ? acctIdx + 1 : null;
+        const acctLabel  = acctNum ? (cloudinaryAccounts[file.account]?.label || file.account) : '';
         const fo       = folders.find(f => f.id === file.folder);
         const date     = file.time ? new Date(file.time).toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '—';
 
@@ -803,8 +1006,9 @@ function render() {
             ${selCheck}
             <div class="dots" onclick="event.stopPropagation(); window.toggleMenu(event,'${file.id}')"><i class="fas fa-ellipsis-v"></i></div>
             <div id="menu-${file.id}" class="dropdown">${currentTab === 'trash' ? trashMenu : normalMenu}</div>
+            ${acctNum ? `<div class="acct-num-badge" title="${acctLabel}">${acctNum}</div>` : ''}
             ${file.starred && !isLocked ? '<div class="star-badge"><i class="fas fa-star"></i></div>' : ''}
-            ${file.locked ? '<div class="lock-badge"><i class="fas fa-shield-halved"></i></div>' : ''}
+            ${(file.locked || acctLocked) ? '<div class="lock-badge"><i class="fas fa-shield-halved"></i></div>' : ''}
             <div class="preview" ${previewClick}>
                 <span class="file-badge ${isVid ? 'badge-vid' : 'badge-img'}">${isVid ? 'Vid' : 'Img'}</span>
                 ${previewHTML}
@@ -847,7 +1051,7 @@ function updateMultiBarActions() {
 window.openNexusLightbox = fileId => {
     const file = allFiles.find(f => f.id === fileId);
     if (!file) return;
-    if (file.locked && !file._unlocked) { window.unlockFile(fileId); return; }
+    if ((file.locked || isAcctLocked(file)) && !file._unlocked) { window.unlockFile(fileId); return; }
 
     const list = sortedList(getVisibleFiles());
     const lbItems = buildLbItems(list);
@@ -939,11 +1143,12 @@ window.startUpload = async () => {
     if (uploadInProgress) return;
     const folder = document.getElementById('uploadFolder').value;
     const customName = document.getElementById('uploadName').value.trim();
+    const chosenAccount = document.getElementById('uploadAccount')?.value || '';
 
     if (!navigator.onLine) {
         // Queue for later
         for (const item of pendingUploadFiles) {
-            await addToPendingUploads({ file: item.file, customName, folder });
+            await addToPendingUploads({ file: item.file, customName, folder, account: chosenAccount });
             item.status = 'queued';
         }
         renderStagedFiles();
@@ -972,7 +1177,7 @@ window.startUpload = async () => {
             await uploadSingleFile(item.file, customName, folder, pct => {
                 upBar.style.width = pct + '%';
                 upPct.textContent  = pct + '%';
-            });
+            }, chosenAccount);
             item.status = 'done';
         } catch (e) {
             item.status = 'error';
@@ -991,11 +1196,12 @@ window.startUpload = async () => {
     if (!pendingUploadFiles.length) setTimeout(() => window.toggleUploadPanel(), 1000);
 };
 
-async function uploadSingleFile(file, customName, folder, onProgress) {
+async function uploadSingleFile(file, customName, folder, onProgress, account) {
     const token = await getAuthToken();
     return new Promise((resolve, reject) => {
         const fd = new FormData();
         fd.append('file', file);
+        if (account) fd.append('account', account);
         const xhr = new XMLHttpRequest();
         // Progress reflects the browser → Worker leg. The Worker → Cloudinary
         // leg (plus the Firebase usage update) happens after that reaches
@@ -1182,7 +1388,7 @@ window.toggleLock = id => {
 
 window.unlockFile = id => {
     const file = allFiles.find(f => f.id === id);
-    if (!file?.locked) return;
+    if (!file || !(file.locked || isAcctLocked(file))) return;
     showPasscodeScreen(() => {
         document.getElementById('passcodeSection').classList.add('hidden');
         file._unlocked = true;
