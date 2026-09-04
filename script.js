@@ -157,6 +157,7 @@ function renderSettingsAccounts(ids) {
                         </label>
                     </div>
                     <div class="acct-manage-actions">
+                        <button class="settings-mini-btn" onclick="window.tagUntaggedFiles('${id}')" title="Assign files with no account tag (old uploads) to this account"><i class="fas fa-tags"></i> Tag untagged files here</button>
                         <button class="settings-mini-btn danger" onclick="window.deleteAccountEntry('${id}')"><i class="fas fa-trash"></i> Remove</button>
                     </div>
                 </div>`;
@@ -207,14 +208,20 @@ window.setPasscodeEnabled = val => {
 window.updateAccountField = (id, field, value) => {
     if (!cloudinaryAccounts[id]) cloudinaryAccounts[id] = {};
     cloudinaryAccounts[id][field] = value;
-    renderAccountUsage();
-    render(); updateStats(); renderFolders();
+
+    // Persist first, so a re-render hiccup can never block the actual save.
     if (navigator.onLine) {
         update(ref(db, `${ACCOUNTS_PATH}/${id}`), { [field]: value })
+            .then(() => showToast(`Saved · ${field.replace(/_/g,' ')}`, 'success'))
             .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
     } else {
         showToast('Offline — change will sync once online', 'warning');
     }
+
+    try { renderAccountUsage(); } catch (e) { console.error('renderAccountUsage failed', e); }
+    try { render(); } catch (e) { console.error('render failed', e); }
+    try { updateStats(); } catch (e) { console.error('updateStats failed', e); }
+    try { renderFolders(); } catch (e) { console.error('renderFolders failed', e); }
 };
 
 window.setDefaultAccount = id => {
@@ -276,6 +283,35 @@ window.addAccountEntry = () => {
                 renderAccountUsage();
                 if (navigator.onLine) await set(ref(db, `${ACCOUNTS_PATH}/${id}`), data);
                 showToast('Account added — also add it to the Worker CLOUDINARY_ACCOUNTS secret to enable uploads', 'success');
+            }}
+        ]
+    });
+};
+
+window.tagUntaggedFiles = id => {
+    const untagged = allFiles.filter(f => !f.account);
+    if (!untagged.length) { showToast('No untagged files found — every file already has an account.', 'info'); return; }
+    const label = cloudinaryAccounts[id]?.label || id;
+    showModal({
+        title: 'TAG EXISTING FILES',
+        body:  `Assign all ${untagged.length} file(s) that don't have a cloud-account tag yet (usually older uploads from before multi-account support) to "${label}"? This only labels them for Hide/Lock/the number badge — it does NOT move or re-upload the actual files.`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: 'Tag them', cls: 'modal-btn-confirm', action: async () => {
+                closeModal();
+                const updates = {};
+                untagged.forEach(f => { f.account = id; updates[`${DB_PATH}/${f.id}/account`] = id; });
+                render(); updateStats(); renderFolders();
+                if (navigator.onLine) {
+                    try {
+                        await update(ref(db), updates);
+                        showToast(`Tagged ${untagged.length} file(s) to ${label}`, 'success');
+                    } catch (e) {
+                        showToast(`Failed to tag files: ${e.message}`, 'error');
+                    }
+                } else {
+                    showToast('Offline — redo this once online', 'warning');
+                }
             }}
         ]
     });
