@@ -73,25 +73,34 @@
         <div class="pc-icon"><i class="fas fa-shield-halved"></i></div>
         <div class="pc-title">ACCESS CODE</div>
         <div id="passcodeMessage" class="pc-msg">Enter your 4-digit access code</div>
-        <div id="passcodeDots" class="pc-dots">
-            <div class="passcode-dot"></div>
-            <div class="passcode-dot"></div>
-            <div class="passcode-dot"></div>
-            <div class="passcode-dot"></div>
+        <div id="pcNumericMode">
+            <div id="passcodeDots" class="pc-dots">
+                <div class="passcode-dot"></div>
+                <div class="passcode-dot"></div>
+                <div class="passcode-dot"></div>
+                <div class="passcode-dot"></div>
+            </div>
+            <div class="pc-pad">
+                <button class="pc-key" onclick="window.enterPasscode('1')">1</button>
+                <button class="pc-key" onclick="window.enterPasscode('2')">2</button>
+                <button class="pc-key" onclick="window.enterPasscode('3')">3</button>
+                <button class="pc-key" onclick="window.enterPasscode('4')">4</button>
+                <button class="pc-key" onclick="window.enterPasscode('5')">5</button>
+                <button class="pc-key" onclick="window.enterPasscode('6')">6</button>
+                <button class="pc-key" onclick="window.enterPasscode('7')">7</button>
+                <button class="pc-key" onclick="window.enterPasscode('8')">8</button>
+                <button class="pc-key" onclick="window.enterPasscode('9')">9</button>
+                <button class="pc-key pc-cancel" onclick="window.cancelPasscode()">✕</button>
+                <button class="pc-key" onclick="window.enterPasscode('0')">0</button>
+                <button class="pc-key pc-del" onclick="window.clearPasscode()">⌫</button>
+            </div>
         </div>
-        <div class="pc-pad">
-            <button class="pc-key" onclick="window.enterPasscode('1')">1</button>
-            <button class="pc-key" onclick="window.enterPasscode('2')">2</button>
-            <button class="pc-key" onclick="window.enterPasscode('3')">3</button>
-            <button class="pc-key" onclick="window.enterPasscode('4')">4</button>
-            <button class="pc-key" onclick="window.enterPasscode('5')">5</button>
-            <button class="pc-key" onclick="window.enterPasscode('6')">6</button>
-            <button class="pc-key" onclick="window.enterPasscode('7')">7</button>
-            <button class="pc-key" onclick="window.enterPasscode('8')">8</button>
-            <button class="pc-key" onclick="window.enterPasscode('9')">9</button>
-            <button class="pc-key pc-cancel" onclick="window.cancelPasscode()">✕</button>
-            <button class="pc-key" onclick="window.enterPasscode('0')">0</button>
-            <button class="pc-key pc-del" onclick="window.clearPasscode()">⌫</button>
+        <div id="pcGestureMode" class="hidden">
+            <div class="gesture-plate-wrap"><canvas id="gestureCanvas" width="260" height="260"></canvas></div>
+            <div class="gesture-actions">
+                <button class="pc-key pc-cancel gesture-btn" onclick="window.clearGesture()">Clear</button>
+                <button class="pc-key pc-cancel gesture-btn" onclick="window.cancelPasscode()">Cancel</button>
+            </div>
         </div>
     </div>
 </div>
@@ -137,6 +146,11 @@
             <div class="stat-icon" style="color:var(--neon2)"><i class="fas fa-video"></i></div>
             <div class="stat-info"><span id="vidCount">0</span><span class="stat-label">Videos</span></div>
             <div class="stat-bar-wrap"><div class="stat-bar neon2-bar" id="vidBar"></div></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon" style="color:#7aa2ff"><i class="fas fa-file-lines"></i></div>
+            <div class="stat-info"><span id="fileCount">0</span><span class="stat-label">Files</span></div>
+            <div class="stat-bar-wrap"><div class="stat-bar" id="fileBar" style="background:linear-gradient(90deg,#7aa2ff,#5577cc)"></div></div>
         </div>
         <div class="stat-card">
             <div class="stat-icon" style="color:#ffd700"><i class="fas fa-star"></i></div>
@@ -210,6 +224,7 @@
         <button class="tab-btn active" onclick="window.setTab('all', this)"><i class="fas fa-layer-group"></i> All</button>
         <button class="tab-btn" onclick="window.setTab('image', this)"><i class="fas fa-image"></i> Images</button>
         <button class="tab-btn" onclick="window.setTab('video', this)"><i class="fas fa-video"></i> Videos</button>
+        <button class="tab-btn" onclick="window.setTab('file', this)"><i class="fas fa-file-lines"></i> Files</button>
         <button class="tab-btn" onclick="window.setTab('starred', this)"><i class="fas fa-star"></i> Starred</button>
         <button class="tab-btn" onclick="window.setTab('locked', this)"><i class="fas fa-lock"></i> Locked</button>
         <button class="tab-btn" onclick="window.setTab('trash', this)"><i class="fas fa-trash"></i> Trash</button>
@@ -236,7 +251,7 @@
                 <div class="dz-text">Drop files here or</div>
                 <label class="dz-btn">
                     <i class="fas fa-folder-open"></i> Browse Files
-                    <input type="file" id="fileInput" multiple accept="image/*,video/*" onchange="window.handleFileSelect(event)">
+                    <input type="file" id="fileInput" multiple onchange="window.handleFileSelect(event)">
                 </label>
                 <div class="dz-hint">Images & Videos · Max 50MB each</div>
             </div>
@@ -320,6 +335,23 @@
                 </div>
                 <button class="settings-mini-btn" onclick="window.updatePasscode()"><i class="fas fa-key"></i> Change</button>
             </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Unlock method</span>
+                    <span class="settings-row-sub">Number code, or draw a gesture/shape instead</span>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button class="settings-mini-btn" id="unlockMethodPasscodeBtn" onclick="window.setUnlockMethod('passcode')">Passcode</button>
+                    <button class="settings-mini-btn" id="unlockMethodGestureBtn" onclick="window.setUnlockMethod('gesture')">Gesture</button>
+                </div>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Record gesture</span>
+                    <span class="settings-row-sub">Draw the shape/letter you'll use to unlock</span>
+                </div>
+                <button class="settings-mini-btn" onclick="window.openGestureSetup()"><i class="fas fa-pen-nib"></i> Record</button>
+            </div>
         </section>
 
         <section class="settings-section" id="settingsAccountsSection">
@@ -334,6 +366,28 @@
             <div id="settingsAccountsList" class="settings-accounts-list"></div>
         </section>
 
+        <section class="settings-section" id="settingsTrendSection">
+            <div class="settings-section-hdr"><span><i class="fas fa-chart-line"></i> Storage Growth Trend</span></div>
+            <div class="settings-row-sub" style="padding:0 2px 10px;">Cumulative storage used over time, based on each file's upload date.</div>
+            <div id="storageTrendChart"></div>
+        </section>
+
+    </div>
+</div><!-- /settingsOverlay -->
+
+<!-- ─────────────────────── GESTURE SETUP (record unlock shape) ── -->
+<div id="gestureSetupOverlay" class="settings-overlay gesture-setup-overlay hidden">
+    <div class="settings-topbar">
+        <div class="settings-topbar-title"><i class="fas fa-pen-nib"></i> RECORD GESTURE</div>
+        <button class="settings-close" onclick="window.closeGestureSetup()"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div class="settings-body gesture-setup-body">
+        <div id="gsMsg" class="settings-row-sub gs-msg">Draw the shape or letter you want to use to unlock the app</div>
+        <div class="gesture-plate-wrap"><canvas id="gestureSetupCanvas" width="260" height="260"></canvas></div>
+        <div class="gesture-actions">
+            <button class="settings-mini-btn" onclick="window.clearGestureSetup()"><i class="fas fa-rotate-left"></i> Clear</button>
+            <button class="settings-mini-btn accent" onclick="window.confirmGestureSetup()"><i class="fas fa-check"></i> Use this</button>
+        </div>
     </div>
 </div>
 

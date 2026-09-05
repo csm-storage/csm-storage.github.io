@@ -54,6 +54,56 @@ async function getAuthToken() {
     return getIdToken(auth.currentUser, /* forceRefresh */ false);
 }
 
+/* ─── Storage growth trend (built entirely from existing file records —
+   no extra data needed: each file already has a time + size) ────── */
+function buildStorageTrendSVG() {
+    const files = allFiles.filter(f => f.time && f.size);
+    if (!files.length) return null;
+
+    const byDay = {};
+    files.forEach(f => {
+        const day = new Date(f.time).toISOString().slice(0, 10);
+        byDay[day] = (byDay[day] || 0) + (parseFloat(f.size) || 0);
+    });
+    const days = Object.keys(byDay).sort();
+    let running = 0;
+    const points = days.map(day => { running += byDay[day]; return { day, total: running }; });
+    if (points.length < 2) points.unshift({ day: points[0].day, total: 0 });
+
+    const W = 600, H = 220, padL = 50, padR = 14, padT = 14, padB = 26;
+    const maxY = Math.max(...points.map(p => p.total), 1);
+    const n = points.length;
+    const xAt = i => padL + (n === 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
+    const yAt = v => H - padB - (v / maxY) * (H - padT - padB);
+
+    const linePts = points.map((p, i) => `${xAt(i)},${yAt(p.total)}`).join(' ');
+    const areaPts = `${xAt(0)},${H - padB} ${linePts} ${xAt(n - 1)},${H - padB}`;
+
+    let grid = '';
+    for (let i = 0; i <= 3; i++) {
+        const v = (maxY / 3) * i;
+        const y = yAt(v);
+        grid += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>`;
+        grid += `<text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="#8a8a9a" font-family="monospace">${v >= 1024 ? (v/1024).toFixed(1)+'GB' : v.toFixed(0)+'MB'}</text>`;
+    }
+    const firstLabel = points[0].day.slice(5);
+    const lastLabel  = points[n - 1].day.slice(5);
+
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;">
+        ${grid}
+        <polygon points="${areaPts}" fill="rgba(0,255,204,0.12)" />
+        <polyline points="${linePts}" fill="none" stroke="#00ffcc" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        <text x="${padL}" y="${H - 6}" font-size="9" fill="#8a8a9a" font-family="monospace">${firstLabel}</text>
+        <text x="${W - padR}" y="${H - 6}" text-anchor="end" font-size="9" fill="#8a8a9a" font-family="monospace">${lastLabel}</text>
+    </svg>`;
+}
+function renderStorageTrend() {
+    const wrap = document.getElementById('storageTrendChart');
+    if (!wrap) return;
+    const svg = buildStorageTrendSVG();
+    wrap.innerHTML = svg || `<div class="acct-empty">Not enough data yet — upload a few files first.</div>`;
+}
+
 /* ─── Cloudinary account usage (for the Settings tab) ───────────── */
 let cloudinaryAccounts = {};
 function loadCloudinaryAccounts() {
@@ -186,7 +236,9 @@ window.openSettings = (section) => {
     document.getElementById('settingsOverlay').classList.remove('hidden');
     const pt = document.getElementById('passcodeEnabledToggle');
     if (pt) pt.checked = passcodeEnabled;
+    refreshUnlockMethodButtons();
     renderAccountUsage();
+    renderStorageTrend();
     if (section === 'accounts') {
         setTimeout(() => document.getElementById('settingsAccountsSection')
             ?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
@@ -345,6 +397,9 @@ let selectedIds     = new Set();
 let contextTarget   = null;
 let appPasscode     = '2240';
 let passcodeEnabled = true;
+let unlockMethod    = 'passcode'; // 'passcode' | 'gesture'
+let gestureTemplate = null;       // normalized reference points for draw-to-unlock
+let gestureSetupPoints = null;    // last stroke drawn in the "record gesture" screen
 let passcodeCallback= null;
 let passcodeInput   = '';
 let sessionUnlocked = false;
@@ -623,9 +678,213 @@ document.getElementById('loginPass').addEventListener('keydown', e => {
 function showPasscodeScreen(cb) {
     passcodeCallback = cb; passcodeInput = '';
     document.getElementById('passcodeSection').classList.remove('hidden');
-    document.getElementById('passcodeMessage').textContent = 'Enter your 4-digit access code';
-    updatePasscodeDots();
+    const numMode = document.getElementById('pcNumericMode');
+    const gesMode = document.getElementById('pcGestureMode');
+    if (unlockMethod === 'gesture' && gestureTemplate) {
+        numMode.classList.add('hidden');
+        gesMode.classList.remove('hidden');
+        document.getElementById('passcodeMessage').textContent = 'Draw your unlock gesture';
+        initGestureCanvas('gestureCanvas', points => {
+            const score = gestureScoreMatch(points, gestureTemplate);
+            if (score >= 0.72) {
+                if (passcodeCallback) passcodeCallback();
+                passcodeCallback = null;
+            } else {
+                document.getElementById('passcodeMessage').textContent = 'Not recognized — try again';
+                setTimeout(() => {
+                    document.getElementById('gestureCanvas')?._clear?.();
+                    document.getElementById('passcodeMessage').textContent = 'Draw your unlock gesture';
+                }, 700);
+            }
+        });
+    } else {
+        gesMode.classList.add('hidden');
+        numMode.classList.remove('hidden');
+        document.getElementById('passcodeMessage').textContent = 'Enter your 4-digit access code';
+        updatePasscodeDots();
+    }
 }
+window.clearGesture = () => { document.getElementById('gestureCanvas')?._clear?.(); };
+
+/* ─── $1 Unistroke gesture recognizer (self-contained, no libs) ───
+   Used for the optional "draw to unlock" alternative to the passcode.
+   Only ever compares against ONE saved template, so this is a
+   simplified single-template version of the classic $1 algorithm:
+   resample -> rotate to indicative angle -> scale -> translate to
+   origin -> find best-fit rotation -> average point distance -> score. */
+const GESTURE_N    = 64;
+const GESTURE_SIZE = 250;
+function gDist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function gCentroid(points) {
+    const x = points.reduce((s, p) => s + p.x, 0) / points.length;
+    const y = points.reduce((s, p) => s + p.y, 0) / points.length;
+    return { x, y };
+}
+function gResample(points, n) {
+    const pathLen = points.reduce((sum, p, i) => i === 0 ? 0 : sum + gDist(points[i - 1], p), 0);
+    if (pathLen === 0) return new Array(n).fill(points[0]);
+    const interval = pathLen / (n - 1);
+    let D = 0;
+    let pts = points.slice();
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+        const d = gDist(pts[i - 1], pts[i]);
+        if (D + d >= interval) {
+            const t = (interval - D) / d;
+            const q = { x: pts[i - 1].x + t * (pts[i].x - pts[i - 1].x), y: pts[i - 1].y + t * (pts[i].y - pts[i - 1].y) };
+            out.push(q);
+            pts.splice(i, 0, q);
+            D = 0;
+        } else D += d;
+    }
+    while (out.length < n) out.push(pts[pts.length - 1]);
+    return out;
+}
+function gRotate(points, angle) {
+    const c = gCentroid(points);
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    return points.map(p => ({
+        x: (p.x - c.x) * cos - (p.y - c.y) * sin + c.x,
+        y: (p.x - c.x) * sin + (p.y - c.y) * cos + c.y
+    }));
+}
+function gScale(points, size) {
+    const xs = points.map(p => p.x), ys = points.map(p => p.y);
+    const w = Math.max(Math.max(...xs) - Math.min(...xs), 1e-6);
+    const h = Math.max(Math.max(...ys) - Math.min(...ys), 1e-6);
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    return points.map(p => ({ x: (p.x - minX) * (size / w), y: (p.y - minY) * (size / h) }));
+}
+function gTranslateToOrigin(points) {
+    const c = gCentroid(points);
+    return points.map(p => ({ x: p.x - c.x, y: p.y - c.y }));
+}
+function gestureNormalize(rawPoints) {
+    if (!rawPoints || rawPoints.length < 2) return null;
+    let pts = gResample(rawPoints, GESTURE_N);
+    const c = gCentroid(pts);
+    const indicativeAngle = Math.atan2(pts[0].y - c.y, pts[0].x - c.x);
+    pts = gRotate(pts, -indicativeAngle);
+    pts = gScale(pts, GESTURE_SIZE);
+    pts = gTranslateToOrigin(pts);
+    return pts;
+}
+function gPathDistance(a, b) {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += gDist(a[i], b[i]);
+    return d / a.length;
+}
+function gDistanceAtBestAngle(points, template) {
+    // Golden-section search for the rotation (within ±45°) that best aligns
+    // the drawn stroke to the template, so small rotation differences
+    // between attempts don't count against the match.
+    const phi = 0.5 * (Math.sqrt(5) - 1);
+    let a = -Math.PI / 4, b = Math.PI / 4;
+    let x1 = phi * a + (1 - phi) * b, f1 = gPathDistance(gRotate(points, x1), template);
+    let x2 = (1 - phi) * a + phi * b, f2 = gPathDistance(gRotate(points, x2), template);
+    for (let i = 0; i < 10; i++) {
+        if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = phi * a + (1 - phi) * b; f1 = gPathDistance(gRotate(points, x1), template); }
+        else { a = x1; x1 = x2; f1 = f2; x2 = (1 - phi) * a + phi * b; f2 = gPathDistance(gRotate(points, x2), template); }
+    }
+    return Math.min(f1, f2);
+}
+/** 0..1 score (1 = perfect). ~0.72+ is a good "same shape, drawn again" threshold. */
+function gestureScoreMatch(rawPoints, template) {
+    if (!template || !template.length) return 0;
+    const norm = gestureNormalize(rawPoints);
+    if (!norm) return 0;
+    const halfDiagonal = 0.5 * Math.hypot(GESTURE_SIZE, GESTURE_SIZE);
+    return Math.max(0, 1 - gDistanceAtBestAngle(norm, template) / halfDiagonal);
+}
+
+/** Wires up pointer/touch capture on a drawing-plate canvas. Safe to call
+ *  repeatedly on the same canvas — it only binds listeners once and just
+ *  swaps the onStroke callback + clears the plate on later calls. */
+function initGestureCanvas(canvasId, onStroke) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    canvas._onStroke = onStroke;
+    if (canvas._gestureBound) { canvas._clear(); return; }
+    canvas._gestureBound = true;
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    let points = [];
+    const pos = e => {
+        const r = canvas.getBoundingClientRect();
+        const t = e.touches && e.touches[0];
+        const clientX = t ? t.clientX : e.clientX, clientY = t ? t.clientY : e.clientY;
+        return { x: (clientX - r.left) * (canvas.width / r.width), y: (clientY - r.top) * (canvas.height / r.height) };
+    };
+    const start = e => {
+        e.preventDefault();
+        drawing = true; points = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#00ffcc'; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        const p = pos(e); points.push(p);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y);
+    };
+    const move = e => {
+        if (!drawing) return;
+        e.preventDefault();
+        const p = pos(e); points.push(p);
+        ctx.lineTo(p.x, p.y); ctx.stroke();
+    };
+    const end = () => {
+        if (!drawing) return;
+        drawing = false;
+        if (canvas._onStroke) canvas._onStroke(points.slice());
+    };
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', end);
+    canvas._clear = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+/* ─── Gesture setup (record a new unlock shape) ────────────────── */
+window.openGestureSetup = () => {
+    gestureSetupPoints = null;
+    document.getElementById('gsMsg').textContent = 'Draw the shape or letter you want to use to unlock the app';
+    document.getElementById('gestureSetupOverlay').classList.remove('hidden');
+    initGestureCanvas('gestureSetupCanvas', points => { gestureSetupPoints = points; });
+};
+window.closeGestureSetup = () => document.getElementById('gestureSetupOverlay').classList.add('hidden');
+window.clearGestureSetup = () => { document.getElementById('gestureSetupCanvas')?._clear?.(); gestureSetupPoints = null; };
+window.confirmGestureSetup = () => {
+    if (!gestureSetupPoints || gestureSetupPoints.length < 6) {
+        showToast('Draw a bit more before saving', 'warning');
+        return;
+    }
+    gestureTemplate = gestureNormalize(gestureSetupPoints);
+    unlockMethod = 'gesture';
+    if (navigator.onLine) {
+        update(ref(db, SETTINGS_PATH), { gestureTemplate, unlockMethod: 'gesture' })
+            .then(() => showToast('Gesture saved — it now unlocks the app', 'success'))
+            .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+    } else {
+        showToast('Offline — gesture will sync once online', 'warning');
+    }
+    window.closeGestureSetup();
+    refreshUnlockMethodButtons();
+};
+
+function refreshUnlockMethodButtons() {
+    document.getElementById('unlockMethodPasscodeBtn')?.classList.toggle('accent', unlockMethod !== 'gesture');
+    document.getElementById('unlockMethodGestureBtn')?.classList.toggle('accent', unlockMethod === 'gesture');
+}
+window.setUnlockMethod = method => {
+    if (method === 'gesture' && !gestureTemplate) {
+        showToast('Record a gesture first', 'warning');
+        window.openGestureSetup();
+        return;
+    }
+    unlockMethod = method;
+    refreshUnlockMethodButtons();
+    if (navigator.onLine) update(ref(db, SETTINGS_PATH), { unlockMethod: method }).catch(() => {});
+    showToast(method === 'gesture' ? 'Gesture unlock enabled' : 'Passcode unlock enabled', 'info');
+};
 window.enterPasscode = num => {
     if (passcodeInput.length >= 4) return;
     passcodeInput += num;
@@ -712,6 +971,8 @@ function loadSettings() {
         const s = snap.val();
         if (s?.passcode)        appPasscode     = s.passcode;
         if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
+        if (s?.unlockMethod)    unlockMethod    = s.unlockMethod;
+        if (s?.gestureTemplate) gestureTemplate = s.gestureTemplate;
     });
 }
 
@@ -817,14 +1078,15 @@ async function uploadQueuedItem(file, customName, folder, account) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Upload failed');
-    const isVid = data.resourceType === 'video';
+    const cat = data.resourceType === 'video' ? 'video' : data.resourceType === 'image' ? 'image' : 'file';
     const rec = {
         url:          data.secure_url,
         publicId:     data.publicId,
         account:      data.account,
         resourceType: data.resourceType,
-        cat:     isVid ? 'video' : 'image',
+        cat:     cat,
         name:    customName || file.name.replace(/\.[^.]+$/, ''),
+        ext:     (file.name.match(/\.([^.]+)$/) || [,''])[1].toLowerCase(),
         size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
         folder:  folder || '',
         time:    Date.now(),
@@ -852,19 +1114,22 @@ function updateUploadQueueBadge() {
 function updateStats() {
     const files    = nonHiddenFiles();
     const active   = files.filter(f => !f.trash);
-    const imgs     = active.filter(f => f.cat !== 'video').length;
+    const imgs     = active.filter(f => f.cat === 'image' || !f.cat).length;
     const vids     = active.filter(f => f.cat === 'video').length;
+    const docs     = active.filter(f => f.cat === 'file').length;
     const stars    = active.filter(f => f.starred).length;
     const trashed  = files.filter(f => f.trash).length;
     const total    = Math.max(active.length, 1);
 
     document.getElementById('imgCount').textContent   = imgs;
     document.getElementById('vidCount').textContent   = vids;
+    document.getElementById('fileCount').textContent  = docs;
     document.getElementById('starCount').textContent  = stars;
     document.getElementById('trashCount').textContent = trashed;
 
     document.getElementById('imgBar').style.width   = (imgs  / total * 100) + '%';
     document.getElementById('vidBar').style.width   = (vids  / total * 100) + '%';
+    document.getElementById('fileBar').style.width  = (docs  / total * 100) + '%';
     document.getElementById('starBar').style.width  = (stars / total * 100) + '%';
     document.getElementById('trashBar').style.width = (trashed / Math.max(trashed + total, 1) * 100) + '%';
 
@@ -950,6 +1215,21 @@ function buildLbItems(list) {
 }
 
 /* ─── Render ─────────────────────────────────────────────────── */
+/** Picks a FontAwesome icon name for a non-media "file" card based on extension. */
+function getDocIcon(ext) {
+    ext = (ext || '').toLowerCase();
+    if (ext === 'pdf') return 'file-pdf';
+    if (['zip','rar','7z','tar','gz'].includes(ext)) return 'file-zipper';
+    if (['doc','docx'].includes(ext)) return 'file-word';
+    if (['xls','xlsx','csv'].includes(ext)) return 'file-excel';
+    if (['ppt','pptx'].includes(ext)) return 'file-powerpoint';
+    if (ext === 'apk') return 'mobile-screen-button';
+    if (['txt','md','log'].includes(ext)) return 'file-lines';
+    if (['mp3','wav','ogg','m4a'].includes(ext)) return 'file-audio';
+    if (['json','xml','yml','yaml'].includes(ext)) return 'file-code';
+    return 'file';
+}
+
 function render() {
     const grid = document.getElementById('fileGrid');
     grid.innerHTML = '';
@@ -1001,8 +1281,14 @@ function render() {
         }
 
         let previewHTML;
+        const docIcon = getDocIcon(file.ext || (file.name || '').split('.').pop());
         if (isLocked) {
             previewHTML = `<div style="width:100%;height:100%;background:#0a0a15;display:flex;align-items:center;justify-content:center;"><i class="fas fa-lock" style="font-size:2rem;color:rgba(255,170,0,0.3);"></i></div>`;
+        } else if (file.cat === 'file') {
+            previewHTML = `<div style="width:100%;height:100%;background:#0a0a15;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;">
+                <i class="fas fa-${docIcon}" style="font-size:2.2rem;color:#7aa2ff;"></i>
+                <span style="font-size:0.6rem;color:var(--text-dim);font-family:var(--font-mono);text-transform:uppercase;">${(file.ext || '').slice(0,6)}</span>
+            </div>`;
         } else if (isVid) {
             const vsrc = isOffline ? '' : `${thumbSrc}#t=0.1`;
             previewHTML = (vsrc
@@ -1034,9 +1320,11 @@ function render() {
         const selCheck = selectMode
             ? `<div class="select-check ${selectedIds.has(file.id) ? 'checked' : ''}" onclick="event.stopPropagation(); window.toggleSelect('${file.id}')"></div>` : '';
 
-        const previewClick = !isLocked && !selectMode
-            ? `onclick="window.openNexusLightbox('${file.id}')"`
-            : isLocked ? `onclick="window.unlockFile('${file.id}')"` : '';
+        const previewClick = isLocked
+            ? `onclick="window.unlockFile('${file.id}')"`
+            : selectMode ? ''
+            : file.cat === 'file' ? `onclick="window.downloadFile('${file.url}','${file.name}')"`
+            : `onclick="window.openNexusLightbox('${file.id}')"`;
 
         card.innerHTML = `
             ${selCheck}
@@ -1046,7 +1334,7 @@ function render() {
             ${file.starred && !isLocked ? '<div class="star-badge"><i class="fas fa-star"></i></div>' : ''}
             ${(file.locked || acctLocked) ? '<div class="lock-badge"><i class="fas fa-shield-halved"></i></div>' : ''}
             <div class="preview" ${previewClick}>
-                <span class="file-badge ${isVid ? 'badge-vid' : 'badge-img'}">${isVid ? 'Vid' : 'Img'}</span>
+                <span class="file-badge ${isVid ? 'badge-vid' : file.cat === 'file' ? 'badge-doc' : 'badge-img'}">${isVid ? 'Vid' : file.cat === 'file' ? (file.ext || 'Doc') : 'Img'}</span>
                 ${previewHTML}
                 <div class="preview-overlay"></div>
             </div>
@@ -1250,14 +1538,15 @@ async function uploadSingleFile(file, customName, folder, onProgress, account) {
             try { data = JSON.parse(xhr.responseText); } catch { data = {}; }
             if (xhr.status >= 200 && xhr.status < 300) {
                 onProgress(95);
-                const isVid = data.resourceType === 'video';
+                const cat = data.resourceType === 'video' ? 'video' : data.resourceType === 'image' ? 'image' : 'file';
                 const rec = {
                     url:          data.secure_url,
                     publicId:     data.publicId,
                     account:      data.account,
                     resourceType: data.resourceType,
-                    cat:     isVid ? 'video' : 'image',
+                    cat:     cat,
                     name:    customName || file.name.replace(/\.[^.]+$/, ''),
+                    ext:     (file.name.match(/\.([^.]+)$/) || [,''])[1].toLowerCase(),
                     size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
                     folder:  folder || '',
                     time:    Date.now(),
