@@ -22,7 +22,7 @@
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, getIdToken } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+import { getDatabase, ref, push, set, get, onValue, remove, update } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
 /* ─── Firebase config ───────────────────────────────────────── */
 const firebaseConfig = {
@@ -610,6 +610,11 @@ onAuthStateChanged(auth, async user => {
             updateStats(); renderFolders(); render(); updateFolderSelect();
         }
 
+        // Must know the REAL passcodeEnabled/unlockMethod/gestureTemplate
+        // before deciding which lock screen to show — otherwise this always
+        // falls back to the hardcoded numeric-passcode default.
+        await fetchSettingsOnce();
+
         if (passcodeEnabled && !sessionUnlocked) {
             showPasscodeScreen(() => {
                 sessionUnlocked = true;
@@ -965,15 +970,26 @@ function loadFolders() {
     });
 }
 
+function applySettingsSnapshot(s) {
+    if (s?.passcode)        appPasscode     = s.passcode;
+    if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
+    if (s?.unlockMethod)    unlockMethod    = s.unlockMethod;
+    if (s?.gestureTemplate) gestureTemplate = s.gestureTemplate;
+}
+/** One-time fetch, awaited BEFORE the passcode/gesture gate decides what to
+ *  show — without this, the gate would use the hardcoded defaults (numeric
+ *  passcode) on every fresh page load, since the live onValue listener
+ *  below only resolves after that decision already ran. */
+async function fetchSettingsOnce() {
+    if (!navigator.onLine) return;
+    try {
+        const snap = await get(ref(db, SETTINGS_PATH));
+        applySettingsSnapshot(snap.val());
+    } catch (e) { console.error('fetchSettingsOnce failed', e); }
+}
 function loadSettings() {
     if (!navigator.onLine) return;
-    onValue(ref(db, SETTINGS_PATH), snap => {
-        const s = snap.val();
-        if (s?.passcode)        appPasscode     = s.passcode;
-        if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
-        if (s?.unlockMethod)    unlockMethod    = s.unlockMethod;
-        if (s?.gestureTemplate) gestureTemplate = s.gestureTemplate;
-    });
+    onValue(ref(db, SETTINGS_PATH), snap => applySettingsSnapshot(snap.val()));
 }
 
 /* ─── Pre-cache images for offline viewing ───────────────────── */
