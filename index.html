@@ -109,6 +109,13 @@
                 <circle class="pattern-dot" data-idx="8" cx="200" cy="200" r="14"></circle>
             </svg>
         </div>
+        <div id="pcAccountPassMode" class="hidden">
+            <div class="acct-pw-wrap">
+                <input type="password" id="acctUnlockInput" class="acct-pw-input" placeholder="Account password" autocomplete="off"
+                    onkeydown="if(event.key==='Enter') window.submitAccountPassword()">
+                <button class="pc-key pc-cancel gesture-btn" onclick="window.submitAccountPassword()">Unlock</button>
+            </div>
+        </div>
         <div id="pcSwitchLink" class="pc-switch-link hidden" onclick="window.togglePcMode()"></div>
         <button class="pc-key pc-cancel pc-cancel-standalone hidden" id="pcStandaloneCancel" onclick="window.cancelPasscode()">Cancel</button>
     </div>

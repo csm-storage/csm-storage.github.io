@@ -38,6 +38,7 @@ const DB_PATH       = 'my_gallery';
 const FOLDERS_PATH  = 'folders';
 const SETTINGS_PATH = 'settings';
 const ACCOUNTS_PATH = 'cloudinary_accounts';
+const BACKUP_PATH   = 'account_password_backup'; // plaintext recovery copy — app NEVER reads this back, admin-console-only
 
 /* ─── Multi-Cloudinary Worker (backend brain) ──────────────────
    Uploads/deletes go through this Worker instead of straight to
@@ -207,6 +208,12 @@ function renderSettingsAccounts(ids) {
                         </label>
                     </div>
                     <div class="acct-manage-actions">
+                        <button class="settings-mini-btn ${a.passwordHash ? 'accent' : ''}" onclick="window.openAccountPasswordSetup('${id}')" title="Custom password used when this account is locked">
+                            <i class="fas fa-key"></i> ${a.passwordHash ? 'Change account password' : 'Set account password'}
+                        </button>
+                        ${a.passwordHash ? `<button class="settings-mini-btn danger" onclick="window.removeAccountPassword('${id}')"><i class="fas fa-lock-open"></i> Remove password</button>` : ''}
+                    </div>
+                    <div class="acct-manage-actions">
                         <button class="settings-mini-btn" onclick="window.tagUntaggedFiles('${id}')" title="Assign files with no account tag (old uploads) to this account"><i class="fas fa-tags"></i> Tag untagged files here</button>
                         <button class="settings-mini-btn danger" onclick="window.deleteAccountEntry('${id}')"><i class="fas fa-trash"></i> Remove</button>
                     </div>
@@ -368,6 +375,72 @@ window.tagUntaggedFiles = id => {
         ]
     });
 };
+
+window.openAccountPasswordSetup = id => {
+    const label = cloudinaryAccounts[id]?.label || id;
+    showModal({
+        title: 'ACCOUNT PASSWORD',
+        body: `<div style="display:flex;flex-direction:column;gap:10px;">
+            <div class="settings-row-sub" style="padding:0;">Set a custom password for "${label}". While this account is locked, opening its files will ask for THIS password instead of your app passcode/pattern.</div>
+            <input id="acctPwInput" type="password" class="modal-input" style="margin-bottom:0" placeholder="New password (min 4 characters)" autocomplete="new-password">
+            <input id="acctPwConfirm" type="password" class="modal-input" style="margin-bottom:0" placeholder="Confirm password" autocomplete="new-password">
+        </div>`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: 'Save', cls: 'modal-btn-confirm', action: async () => {
+                const pw  = document.getElementById('acctPwInput')?.value || '';
+                const pw2 = document.getElementById('acctPwConfirm')?.value || '';
+                if (pw.length < 4) { showToast('Password must be at least 4 characters', 'warning'); return; }
+                if (pw !== pw2) { showToast("Passwords don't match", 'warning'); return; }
+                closeModal();
+                const hash = await sha256Hex(pw);
+                if (!cloudinaryAccounts[id]) cloudinaryAccounts[id] = {};
+                cloudinaryAccounts[id].passwordHash = hash;
+                renderAccountUsage();
+                if (navigator.onLine) {
+                    try {
+                        await update(ref(db, `${ACCOUNTS_PATH}/${id}`), { passwordHash: hash });
+                        // Plaintext recovery copy — a separate path the app itself
+                        // never reads back; only visible via the Firebase console.
+                        await set(ref(db, `${BACKUP_PATH}/${id}`), pw);
+                        showToast('Account password saved', 'success');
+                    } catch (e) {
+                        showToast(`Failed to save: ${e.message}`, 'error');
+                    }
+                } else {
+                    showToast('Offline — password will sync once online', 'warning');
+                }
+            }}
+        ]
+    });
+};
+window.removeAccountPassword = id => {
+    const label = cloudinaryAccounts[id]?.label || id;
+    showModal({
+        title: 'REMOVE ACCOUNT PASSWORD',
+        body: `Remove the custom password for "${label}"? While locked, its files will then ask for your app passcode/pattern again instead.`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: 'Remove', cls: 'modal-btn-danger', action: async () => {
+                closeModal();
+                if (cloudinaryAccounts[id]) delete cloudinaryAccounts[id].passwordHash;
+                renderAccountUsage();
+                if (navigator.onLine) {
+                    try {
+                        await update(ref(db, `${ACCOUNTS_PATH}/${id}`), { passwordHash: null });
+                        await remove(ref(db, `${BACKUP_PATH}/${id}`));
+                        showToast('Account password removed', 'info');
+                    } catch (e) {
+                        showToast(`Failed: ${e.message}`, 'error');
+                    }
+                } else {
+                    showToast('Offline — change will sync once online', 'warning');
+                }
+            }}
+        ]
+    });
+};
+
 
 window.syncCloudUsage = async () => {
     try {
@@ -678,7 +751,13 @@ document.getElementById('loginPass').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('doLogin').click();
 });
 
-/* ─── Passcode / Pattern unlock ─────────────────────────────── */
+/* ─── Passcode / Pattern / Account-password unlock ───────────── */
+async function sha256Hex(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+let pendingAccountUnlock = null; // { hash, cb } — set while the account-password screen is showing
+
 function showPasscodeScreen(cb) {
     passcodeCallback = cb; passcodeInput = '';
     document.getElementById('passcodeSection').classList.remove('hidden');
@@ -688,9 +767,12 @@ function showPasscodeScreen(cb) {
 function renderPcMode() {
     const numMode = document.getElementById('pcNumericMode');
     const patMode = document.getElementById('pcPatternMode');
+    const apMode  = document.getElementById('pcAccountPassMode');
     const link    = document.getElementById('pcSwitchLink');
     const cancelBtn = document.getElementById('pcStandaloneCancel');
     const hasPattern = Array.isArray(unlockPattern) && unlockPattern.length >= 4;
+    pendingAccountUnlock = null;
+    apMode?.classList.add('hidden');
 
     if (pcMode === 'pattern' && hasPattern) {
         numMode.classList.add('hidden');
@@ -723,6 +805,39 @@ function renderPcMode() {
     }
 }
 window.togglePcMode = () => { pcMode = (pcMode === 'pattern') ? 'passcode' : 'pattern'; renderPcMode(); };
+
+/** Shown instead of the shared app passcode/pattern when the file being
+ *  opened belongs to an account that has its OWN custom password set. */
+function showAccountPasswordScreen(accountId, hash, cb) {
+    passcodeCallback = null;
+    pendingAccountUnlock = { hash, cb };
+    document.getElementById('passcodeSection').classList.remove('hidden');
+    document.getElementById('pcNumericMode').classList.add('hidden');
+    document.getElementById('pcPatternMode').classList.add('hidden');
+    document.getElementById('pcSwitchLink').classList.add('hidden');
+    document.getElementById('pcStandaloneCancel').classList.remove('hidden');
+    const apMode = document.getElementById('pcAccountPassMode');
+    apMode.classList.remove('hidden');
+    const label = cloudinaryAccounts[accountId]?.label || accountId;
+    document.getElementById('passcodeMessage').textContent = `Enter password for "${label}"`;
+    const input = document.getElementById('acctUnlockInput');
+    if (input) { input.value = ''; setTimeout(() => input.focus(), 50); }
+}
+window.submitAccountPassword = async () => {
+    if (!pendingAccountUnlock) return;
+    const input = document.getElementById('acctUnlockInput');
+    const pw = input?.value || '';
+    const hash = await sha256Hex(pw);
+    if (hash === pendingAccountUnlock.hash) {
+        const cb = pendingAccountUnlock.cb;
+        pendingAccountUnlock = null;
+        document.getElementById('passcodeSection').classList.add('hidden');
+        cb();
+    } else {
+        document.getElementById('passcodeMessage').textContent = 'Wrong password — try again';
+        if (input) { input.value = ''; input.focus(); }
+    }
+};
 
 /* ─── Pattern grid (Android-style 3x3 dot lock) ──────────────────
    Exact-sequence match (not fuzzy scoring) — much harder to fake
@@ -879,6 +994,8 @@ window.enterPasscode = num => {
 window.clearPasscode   = () => { passcodeInput = passcodeInput.slice(0,-1); updatePasscodeDots(); };
 window.cancelPasscode  = () => {
     passcodeInput = ''; updatePasscodeDots();
+    pendingAccountUnlock = null;
+    document.getElementById('pcAccountPassMode')?.classList.add('hidden');
     if (!sessionUnlocked) signOut(auth);
     document.getElementById('passcodeSection').classList.add('hidden');
     passcodeCallback = null;
@@ -1693,12 +1810,18 @@ window.toggleLock = id => {
 window.unlockFile = id => {
     const file = allFiles.find(f => f.id === id);
     if (!file || !(file.locked || isAcctLocked(file))) return;
-    showPasscodeScreen(() => {
+    const openCb = () => {
         document.getElementById('passcodeSection').classList.add('hidden');
         file._unlocked = true;
         render();
         setTimeout(() => window.openNexusLightbox(id), 100);
-    });
+    };
+    const acct = file.account ? cloudinaryAccounts[file.account] : null;
+    if (acct && acct.locked && acct.passwordHash) {
+        showAccountPasswordScreen(file.account, acct.passwordHash, openCb);
+    } else {
+        showPasscodeScreen(openCb);
+    }
 };
 
 window.moveToFolder = id => {
