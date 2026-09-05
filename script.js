@@ -236,7 +236,7 @@ window.openSettings = (section) => {
     document.getElementById('settingsOverlay').classList.remove('hidden');
     const pt = document.getElementById('passcodeEnabledToggle');
     if (pt) pt.checked = passcodeEnabled;
-    refreshUnlockMethodButtons();
+    refreshPatternSettingsUI();
     renderAccountUsage();
     renderStorageTrend();
     if (section === 'accounts') {
@@ -397,9 +397,8 @@ let selectedIds     = new Set();
 let contextTarget   = null;
 let appPasscode     = '2240';
 let passcodeEnabled = true;
-let unlockMethod    = 'passcode'; // 'passcode' | 'gesture'
-let gestureTemplate = null;       // normalized reference points for draw-to-unlock
-let gestureSetupPoints = null;    // last stroke drawn in the "record gesture" screen
+let unlockPattern    = null;      // array of dot indices (0-8), the saved unlock pattern
+let pcMode            = 'passcode'; // which UI is showing on the lock screen right now
 let passcodeCallback= null;
 let passcodeInput   = '';
 let sessionUnlocked = false;
@@ -610,9 +609,9 @@ onAuthStateChanged(auth, async user => {
             updateStats(); renderFolders(); render(); updateFolderSelect();
         }
 
-        // Must know the REAL passcodeEnabled/unlockMethod/gestureTemplate
-        // before deciding which lock screen to show — otherwise this always
-        // falls back to the hardcoded numeric-passcode default.
+        // Must know the REAL passcodeEnabled/unlockPattern before deciding
+        // which lock screen to show — otherwise this always falls back to
+        // the hardcoded numeric-passcode default.
         await fetchSettingsOnce();
 
         if (passcodeEnabled && !sessionUnlocked) {
@@ -679,217 +678,182 @@ document.getElementById('loginPass').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('doLogin').click();
 });
 
-/* ─── Passcode ──────────────────────────────────────────────── */
+/* ─── Passcode / Pattern unlock ─────────────────────────────── */
 function showPasscodeScreen(cb) {
     passcodeCallback = cb; passcodeInput = '';
     document.getElementById('passcodeSection').classList.remove('hidden');
+    pcMode = 'passcode';
+    renderPcMode();
+}
+function renderPcMode() {
     const numMode = document.getElementById('pcNumericMode');
-    const gesMode = document.getElementById('pcGestureMode');
-    if (unlockMethod === 'gesture' && gestureTemplate) {
+    const patMode = document.getElementById('pcPatternMode');
+    const link    = document.getElementById('pcSwitchLink');
+    const cancelBtn = document.getElementById('pcStandaloneCancel');
+    const hasPattern = Array.isArray(unlockPattern) && unlockPattern.length >= 4;
+
+    if (pcMode === 'pattern' && hasPattern) {
         numMode.classList.add('hidden');
-        gesMode.classList.remove('hidden');
-        document.getElementById('passcodeMessage').textContent = 'Draw your unlock gesture';
-        initGestureCanvas('gestureCanvas', points => {
-            const score = gestureScoreMatch(points, gestureTemplate);
-            if (score >= 0.72) {
+        patMode.classList.remove('hidden');
+        cancelBtn?.classList.remove('hidden');
+        document.getElementById('passcodeMessage').textContent = 'Draw your unlock pattern';
+        initPatternGrid('patternSvg', path => {
+            if (patternsEqual(path, unlockPattern)) {
                 if (passcodeCallback) passcodeCallback();
                 passcodeCallback = null;
             } else {
-                document.getElementById('passcodeMessage').textContent = 'Not recognized — try again';
+                document.getElementById('passcodeMessage').textContent = 'Wrong pattern — try again';
                 setTimeout(() => {
-                    document.getElementById('gestureCanvas')?._clear?.();
-                    document.getElementById('passcodeMessage').textContent = 'Draw your unlock gesture';
-                }, 700);
+                    document.getElementById('patternSvg')?._resetVisual?.();
+                    document.getElementById('passcodeMessage').textContent = 'Draw your unlock pattern';
+                }, 600);
             }
         });
+        if (link) { link.classList.remove('hidden'); link.innerHTML = '<i class="fas fa-hashtag"></i> Unlock with passcode instead'; }
     } else {
-        gesMode.classList.add('hidden');
+        patMode.classList.add('hidden');
         numMode.classList.remove('hidden');
+        cancelBtn?.classList.add('hidden');
         document.getElementById('passcodeMessage').textContent = 'Enter your 4-digit access code';
         updatePasscodeDots();
+        if (link) {
+            if (hasPattern) { link.classList.remove('hidden'); link.innerHTML = '<i class="fas fa-diagram-project"></i> Unlock with pattern instead'; }
+            else link.classList.add('hidden');
+        }
     }
 }
-window.clearGesture = () => { document.getElementById('gestureCanvas')?._clear?.(); };
+window.togglePcMode = () => { pcMode = (pcMode === 'pattern') ? 'passcode' : 'pattern'; renderPcMode(); };
 
-/* ─── $1 Unistroke gesture recognizer (self-contained, no libs) ───
-   Used for the optional "draw to unlock" alternative to the passcode.
-   Only ever compares against ONE saved template, so this is a
-   simplified single-template version of the classic $1 algorithm:
-   resample -> rotate to indicative angle -> scale -> translate to
-   origin -> find best-fit rotation -> average point distance -> score. */
-const GESTURE_N    = 64;
-const GESTURE_SIZE = 250;
-function gDist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
-function gCentroid(points) {
-    const x = points.reduce((s, p) => s + p.x, 0) / points.length;
-    const y = points.reduce((s, p) => s + p.y, 0) / points.length;
-    return { x, y };
-}
-function gResample(points, n) {
-    const pathLen = points.reduce((sum, p, i) => i === 0 ? 0 : sum + gDist(points[i - 1], p), 0);
-    if (pathLen === 0) return new Array(n).fill(points[0]);
-    const interval = pathLen / (n - 1);
-    let D = 0;
-    let pts = points.slice();
-    const out = [pts[0]];
-    for (let i = 1; i < pts.length; i++) {
-        const d = gDist(pts[i - 1], pts[i]);
-        if (D + d >= interval) {
-            const t = (interval - D) / d;
-            const q = { x: pts[i - 1].x + t * (pts[i].x - pts[i - 1].x), y: pts[i - 1].y + t * (pts[i].y - pts[i - 1].y) };
-            out.push(q);
-            pts.splice(i, 0, q);
-            D = 0;
-        } else D += d;
-    }
-    while (out.length < n) out.push(pts[pts.length - 1]);
-    return out;
-}
-function gRotate(points, angle) {
-    const c = gCentroid(points);
-    const cos = Math.cos(angle), sin = Math.sin(angle);
-    return points.map(p => ({
-        x: (p.x - c.x) * cos - (p.y - c.y) * sin + c.x,
-        y: (p.x - c.x) * sin + (p.y - c.y) * cos + c.y
-    }));
-}
-function gScale(points, size) {
-    const xs = points.map(p => p.x), ys = points.map(p => p.y);
-    const w = Math.max(Math.max(...xs) - Math.min(...xs), 1e-6);
-    const h = Math.max(Math.max(...ys) - Math.min(...ys), 1e-6);
-    const minX = Math.min(...xs), minY = Math.min(...ys);
-    return points.map(p => ({ x: (p.x - minX) * (size / w), y: (p.y - minY) * (size / h) }));
-}
-function gTranslateToOrigin(points) {
-    const c = gCentroid(points);
-    return points.map(p => ({ x: p.x - c.x, y: p.y - c.y }));
-}
-function gestureNormalize(rawPoints) {
-    if (!rawPoints || rawPoints.length < 2) return null;
-    let pts = gResample(rawPoints, GESTURE_N);
-    const c = gCentroid(pts);
-    const indicativeAngle = Math.atan2(pts[0].y - c.y, pts[0].x - c.x);
-    pts = gRotate(pts, -indicativeAngle);
-    pts = gScale(pts, GESTURE_SIZE);
-    pts = gTranslateToOrigin(pts);
-    return pts;
-}
-function gPathDistance(a, b) {
-    let d = 0;
-    for (let i = 0; i < a.length; i++) d += gDist(a[i], b[i]);
-    return d / a.length;
-}
-function gDistanceAtBestAngle(points, template) {
-    // Golden-section search for the rotation (within ±45°) that best aligns
-    // the drawn stroke to the template, so small rotation differences
-    // between attempts don't count against the match.
-    const phi = 0.5 * (Math.sqrt(5) - 1);
-    let a = -Math.PI / 4, b = Math.PI / 4;
-    let x1 = phi * a + (1 - phi) * b, f1 = gPathDistance(gRotate(points, x1), template);
-    let x2 = (1 - phi) * a + phi * b, f2 = gPathDistance(gRotate(points, x2), template);
-    for (let i = 0; i < 10; i++) {
-        if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = phi * a + (1 - phi) * b; f1 = gPathDistance(gRotate(points, x1), template); }
-        else { a = x1; x1 = x2; f1 = f2; x2 = (1 - phi) * a + phi * b; f2 = gPathDistance(gRotate(points, x2), template); }
-    }
-    return Math.min(f1, f2);
-}
-/** 0..1 score (1 = perfect). ~0.72+ is a good "same shape, drawn again" threshold. */
-function gestureScoreMatch(rawPoints, template) {
-    if (!template || !template.length) return 0;
-    const norm = gestureNormalize(rawPoints);
-    if (!norm) return 0;
-    const halfDiagonal = 0.5 * Math.hypot(GESTURE_SIZE, GESTURE_SIZE);
-    return Math.max(0, 1 - gDistanceAtBestAngle(norm, template) / halfDiagonal);
-}
+/* ─── Pattern grid (Android-style 3x3 dot lock) ──────────────────
+   Exact-sequence match (not fuzzy scoring) — much harder to fake
+   than a freehand shape, same as a real pattern lock. */
+function patternsEqual(a, b) { return a.length === b.length && a.every((v, i) => v === b[i]); }
 
-/** Wires up pointer/touch capture on a drawing-plate canvas. Safe to call
- *  repeatedly on the same canvas — it only binds listeners once and just
- *  swaps the onStroke callback + clears the plate on later calls. */
-function initGestureCanvas(canvasId, onStroke) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-    canvas._onStroke = onStroke;
-    if (canvas._gestureBound) { canvas._clear(); return; }
-    canvas._gestureBound = true;
-    const ctx = canvas.getContext('2d');
-    let drawing = false;
-    let points = [];
-    const pos = e => {
-        const r = canvas.getBoundingClientRect();
+/** Wires up drag capture on a pattern-grid <svg id="svgId"> containing
+ *  <circle class="pattern-dot" data-idx="N"> dots and a <g id="{svgId}Lines">
+ *  for the connecting lines. Safe to call repeatedly — only binds once,
+ *  just swaps the completion callback + resets the visual on later calls. */
+function initPatternGrid(svgId, onComplete) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    svg._onComplete = onComplete;
+    if (svg._bound) { svg._resetVisual(); return; }
+    svg._bound = true;
+
+    const dots  = [...svg.querySelectorAll('.pattern-dot')];
+    const lines = document.getElementById(svgId + 'Lines');
+    let path = [];
+    let dragging = false;
+
+    const svgPoint = e => {
+        const rect = svg.getBoundingClientRect();
         const t = e.touches && e.touches[0];
         const clientX = t ? t.clientX : e.clientX, clientY = t ? t.clientY : e.clientY;
-        return { x: (clientX - r.left) * (canvas.width / r.width), y: (clientY - r.top) * (canvas.height / r.height) };
+        const vb = svg.viewBox.baseVal;
+        return { x: (clientX - rect.left) / rect.width * vb.width, y: (clientY - rect.top) / rect.height * vb.height };
+    };
+    const dotAt = pt => dots.find(d => Math.hypot(parseFloat(d.getAttribute('cx')) - pt.x, parseFloat(d.getAttribute('cy')) - pt.y) < 22);
+    const redraw = cursor => {
+        let html = '';
+        for (let i = 0; i < path.length - 1; i++) {
+            const a = dots[path[i]], b = dots[path[i + 1]];
+            html += `<line x1="${a.getAttribute('cx')}" y1="${a.getAttribute('cy')}" x2="${b.getAttribute('cx')}" y2="${b.getAttribute('cy')}" stroke="#00ffcc" stroke-width="4" stroke-linecap="round"/>`;
+        }
+        if (path.length && cursor) {
+            const a = dots[path[path.length - 1]];
+            html += `<line x1="${a.getAttribute('cx')}" y1="${a.getAttribute('cy')}" x2="${cursor.x}" y2="${cursor.y}" stroke="rgba(0,255,204,0.4)" stroke-width="4" stroke-linecap="round"/>`;
+        }
+        lines.innerHTML = html;
+    };
+    const reset = () => {
+        path = []; dragging = false;
+        dots.forEach(d => d.classList.remove('active'));
+        lines.innerHTML = '';
     };
     const start = e => {
         e.preventDefault();
-        drawing = true; points = [];
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = '#00ffcc'; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        const p = pos(e); points.push(p);
-        ctx.beginPath(); ctx.moveTo(p.x, p.y);
+        reset(); dragging = true;
+        const pt = svgPoint(e), d = dotAt(pt);
+        if (d) { path.push(dots.indexOf(d)); d.classList.add('active'); redraw(pt); }
     };
     const move = e => {
-        if (!drawing) return;
+        if (!dragging) return;
         e.preventDefault();
-        const p = pos(e); points.push(p);
-        ctx.lineTo(p.x, p.y); ctx.stroke();
+        const pt = svgPoint(e), d = dotAt(pt);
+        if (d) {
+            const idx = dots.indexOf(d);
+            if (!path.includes(idx)) { path.push(idx); d.classList.add('active'); }
+        }
+        redraw(pt);
     };
     const end = () => {
-        if (!drawing) return;
-        drawing = false;
-        if (canvas._onStroke) canvas._onStroke(points.slice());
+        if (!dragging) return;
+        dragging = false;
+        redraw(null);
+        if (svg._onComplete) svg._onComplete(path.slice());
     };
-    canvas.addEventListener('mousedown', start);
-    canvas.addEventListener('mousemove', move);
+    svg.addEventListener('mousedown', start);
+    svg.addEventListener('mousemove', move);
     window.addEventListener('mouseup', end);
-    canvas.addEventListener('touchstart', start, { passive: false });
-    canvas.addEventListener('touchmove', move, { passive: false });
-    canvas.addEventListener('touchend', end);
-    canvas._clear = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
+    svg.addEventListener('touchstart', start, { passive: false });
+    svg.addEventListener('touchmove', move, { passive: false });
+    svg.addEventListener('touchend', end);
+    svg._resetVisual = reset;
 }
 
-/* ─── Gesture setup (record a new unlock shape) ────────────────── */
-window.openGestureSetup = () => {
-    gestureSetupPoints = null;
-    document.getElementById('gsMsg').textContent = 'Draw the shape or letter you want to use to unlock the app';
-    document.getElementById('gestureSetupOverlay').classList.remove('hidden');
-    initGestureCanvas('gestureSetupCanvas', points => { gestureSetupPoints = points; });
+/* ─── Pattern setup (draw twice to confirm, like a phone's pattern lock) ─ */
+let patternSetupFirst = null;
+window.openPatternSetup = () => {
+    patternSetupFirst = null;
+    document.getElementById('patSetupMsg').textContent = 'Connect at least 4 dots to set your pattern';
+    document.getElementById('patternSetupOverlay').classList.remove('hidden');
+    initPatternGrid('patternSetupSvg', path => {
+        if (path.length < 4) {
+            showToast('Connect at least 4 dots', 'warning');
+            document.getElementById('patternSetupSvg')?._resetVisual?.();
+            return;
+        }
+        if (!patternSetupFirst) {
+            patternSetupFirst = path;
+            document.getElementById('patSetupMsg').textContent = 'Draw the same pattern again to confirm';
+            setTimeout(() => document.getElementById('patternSetupSvg')?._resetVisual?.(), 400);
+        } else if (patternsEqual(path, patternSetupFirst)) {
+            unlockPattern = path;
+            if (navigator.onLine) {
+                update(ref(db, SETTINGS_PATH), { pattern: path })
+                    .then(() => showToast('Pattern saved', 'success'))
+                    .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+            } else {
+                showToast('Offline — pattern will sync once online', 'warning');
+            }
+            window.closePatternSetup();
+            refreshPatternSettingsUI();
+        } else {
+            showToast("Patterns didn't match — try again", 'error');
+            patternSetupFirst = null;
+            document.getElementById('patSetupMsg').textContent = 'Connect at least 4 dots to set your pattern';
+            setTimeout(() => document.getElementById('patternSetupSvg')?._resetVisual?.(), 400);
+        }
+    });
 };
-window.closeGestureSetup = () => document.getElementById('gestureSetupOverlay').classList.add('hidden');
-window.clearGestureSetup = () => { document.getElementById('gestureSetupCanvas')?._clear?.(); gestureSetupPoints = null; };
-window.confirmGestureSetup = () => {
-    if (!gestureSetupPoints || gestureSetupPoints.length < 6) {
-        showToast('Draw a bit more before saving', 'warning');
-        return;
-    }
-    gestureTemplate = gestureNormalize(gestureSetupPoints);
-    unlockMethod = 'gesture';
-    if (navigator.onLine) {
-        update(ref(db, SETTINGS_PATH), { gestureTemplate, unlockMethod: 'gesture' })
-            .then(() => showToast('Gesture saved — it now unlocks the app', 'success'))
-            .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
-    } else {
-        showToast('Offline — gesture will sync once online', 'warning');
-    }
-    window.closeGestureSetup();
-    refreshUnlockMethodButtons();
+window.closePatternSetup = () => document.getElementById('patternSetupOverlay').classList.add('hidden');
+window.clearPatternSetup = () => {
+    document.getElementById('patternSetupSvg')?._resetVisual?.();
+    patternSetupFirst = null;
+    document.getElementById('patSetupMsg').textContent = 'Connect at least 4 dots to set your pattern';
 };
-
-function refreshUnlockMethodButtons() {
-    document.getElementById('unlockMethodPasscodeBtn')?.classList.toggle('accent', unlockMethod !== 'gesture');
-    document.getElementById('unlockMethodGestureBtn')?.classList.toggle('accent', unlockMethod === 'gesture');
+window.removePattern = () => {
+    unlockPattern = null;
+    if (navigator.onLine) update(ref(db, SETTINGS_PATH), { pattern: null }).catch(() => {});
+    showToast('Pattern removed', 'info');
+    refreshPatternSettingsUI();
+};
+function refreshPatternSettingsUI() {
+    const hasPattern = Array.isArray(unlockPattern) && unlockPattern.length >= 4;
+    const label = document.getElementById('patternSetupBtnLabel');
+    if (label) label.textContent = hasPattern ? 'Change pattern' : 'Set pattern';
+    document.getElementById('removePatternBtn')?.classList.toggle('hidden', !hasPattern);
 }
-window.setUnlockMethod = method => {
-    if (method === 'gesture' && !gestureTemplate) {
-        showToast('Record a gesture first', 'warning');
-        window.openGestureSetup();
-        return;
-    }
-    unlockMethod = method;
-    refreshUnlockMethodButtons();
-    if (navigator.onLine) update(ref(db, SETTINGS_PATH), { unlockMethod: method }).catch(() => {});
-    showToast(method === 'gesture' ? 'Gesture unlock enabled' : 'Passcode unlock enabled', 'info');
-};
 window.enterPasscode = num => {
     if (passcodeInput.length >= 4) return;
     passcodeInput += num;
@@ -973,8 +937,7 @@ function loadFolders() {
 function applySettingsSnapshot(s) {
     if (s?.passcode)        appPasscode     = s.passcode;
     if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
-    if (s?.unlockMethod)    unlockMethod    = s.unlockMethod;
-    if (s?.gestureTemplate) gestureTemplate = s.gestureTemplate;
+    if (Array.isArray(s?.pattern)) unlockPattern = s.pattern;
 }
 /** One-time fetch, awaited BEFORE the passcode/gesture gate decides what to
  *  show — without this, the gate would use the hardcoded defaults (numeric

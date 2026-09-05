@@ -95,15 +95,25 @@
                 <button class="pc-key pc-del" onclick="window.clearPasscode()">⌫</button>
             </div>
         </div>
-        <div id="pcGestureMode" class="hidden">
-            <div class="gesture-plate-wrap"><canvas id="gestureCanvas" width="260" height="260"></canvas></div>
-            <div class="gesture-actions">
-                <button class="pc-key pc-cancel gesture-btn" onclick="window.clearGesture()">Clear</button>
-                <button class="pc-key pc-cancel gesture-btn" onclick="window.cancelPasscode()">Cancel</button>
-            </div>
+        <div id="pcPatternMode" class="hidden">
+            <svg id="patternSvg" class="pattern-grid" viewBox="0 0 240 240">
+                <g id="patternSvgLines"></g>
+                <circle class="pattern-dot" data-idx="0" cx="40"  cy="40"  r="14"></circle>
+                <circle class="pattern-dot" data-idx="1" cx="120" cy="40"  r="14"></circle>
+                <circle class="pattern-dot" data-idx="2" cx="200" cy="40"  r="14"></circle>
+                <circle class="pattern-dot" data-idx="3" cx="40"  cy="120" r="14"></circle>
+                <circle class="pattern-dot" data-idx="4" cx="120" cy="120" r="14"></circle>
+                <circle class="pattern-dot" data-idx="5" cx="200" cy="120" r="14"></circle>
+                <circle class="pattern-dot" data-idx="6" cx="40"  cy="200" r="14"></circle>
+                <circle class="pattern-dot" data-idx="7" cx="120" cy="200" r="14"></circle>
+                <circle class="pattern-dot" data-idx="8" cx="200" cy="200" r="14"></circle>
+            </svg>
         </div>
+        <div id="pcSwitchLink" class="pc-switch-link hidden" onclick="window.togglePcMode()"></div>
+        <button class="pc-key pc-cancel pc-cancel-standalone hidden" id="pcStandaloneCancel" onclick="window.cancelPasscode()">Cancel</button>
     </div>
 </div>
+
 
 <!-- ─────────────────────── MAIN APP ─────────────────────────── -->
 <div id="mainContent" class="main-content hidden">
@@ -337,20 +347,13 @@
             </div>
             <div class="settings-row">
                 <div class="settings-row-label">
-                    <span>Unlock method</span>
-                    <span class="settings-row-sub">Number code, or draw a gesture/shape instead</span>
+                    <span>Unlock pattern</span>
+                    <span class="settings-row-sub">Optional — connect dots as an alternative to the passcode. On the lock screen, a link lets you switch between the two.</span>
                 </div>
                 <div style="display:flex;gap:6px;">
-                    <button class="settings-mini-btn" id="unlockMethodPasscodeBtn" onclick="window.setUnlockMethod('passcode')">Passcode</button>
-                    <button class="settings-mini-btn" id="unlockMethodGestureBtn" onclick="window.setUnlockMethod('gesture')">Gesture</button>
+                    <button class="settings-mini-btn" onclick="window.openPatternSetup()"><i class="fas fa-diagram-project"></i> <span id="patternSetupBtnLabel">Set pattern</span></button>
+                    <button class="settings-mini-btn danger hidden" id="removePatternBtn" onclick="window.removePattern()" title="Remove pattern"><i class="fas fa-trash"></i></button>
                 </div>
-            </div>
-            <div class="settings-row">
-                <div class="settings-row-label">
-                    <span>Record gesture</span>
-                    <span class="settings-row-sub">Draw the shape/letter you'll use to unlock</span>
-                </div>
-                <button class="settings-mini-btn" onclick="window.openGestureSetup()"><i class="fas fa-pen-nib"></i> Record</button>
             </div>
         </section>
 
@@ -375,18 +378,28 @@
     </div>
 </div><!-- /settingsOverlay -->
 
-<!-- ─────────────────────── GESTURE SETUP (record unlock shape) ── -->
-<div id="gestureSetupOverlay" class="settings-overlay gesture-setup-overlay hidden">
+<!-- ─────────────────────── PATTERN SETUP (set unlock pattern) ─── -->
+<div id="patternSetupOverlay" class="settings-overlay gesture-setup-overlay hidden">
     <div class="settings-topbar">
-        <div class="settings-topbar-title"><i class="fas fa-pen-nib"></i> RECORD GESTURE</div>
-        <button class="settings-close" onclick="window.closeGestureSetup()"><i class="fas fa-xmark"></i></button>
+        <div class="settings-topbar-title"><i class="fas fa-diagram-project"></i> SET PATTERN</div>
+        <button class="settings-close" onclick="window.closePatternSetup()"><i class="fas fa-xmark"></i></button>
     </div>
     <div class="settings-body gesture-setup-body">
-        <div id="gsMsg" class="settings-row-sub gs-msg">Draw the shape or letter you want to use to unlock the app</div>
-        <div class="gesture-plate-wrap"><canvas id="gestureSetupCanvas" width="260" height="260"></canvas></div>
+        <div id="patSetupMsg" class="settings-row-sub gs-msg">Connect at least 4 dots to set your pattern</div>
+        <svg id="patternSetupSvg" class="pattern-grid" viewBox="0 0 240 240">
+            <g id="patternSetupSvgLines"></g>
+            <circle class="pattern-dot" data-idx="0" cx="40"  cy="40"  r="14"></circle>
+            <circle class="pattern-dot" data-idx="1" cx="120" cy="40"  r="14"></circle>
+            <circle class="pattern-dot" data-idx="2" cx="200" cy="40"  r="14"></circle>
+            <circle class="pattern-dot" data-idx="3" cx="40"  cy="120" r="14"></circle>
+            <circle class="pattern-dot" data-idx="4" cx="120" cy="120" r="14"></circle>
+            <circle class="pattern-dot" data-idx="5" cx="200" cy="120" r="14"></circle>
+            <circle class="pattern-dot" data-idx="6" cx="40"  cy="200" r="14"></circle>
+            <circle class="pattern-dot" data-idx="7" cx="120" cy="200" r="14"></circle>
+            <circle class="pattern-dot" data-idx="8" cx="200" cy="200" r="14"></circle>
+        </svg>
         <div class="gesture-actions">
-            <button class="settings-mini-btn" onclick="window.clearGestureSetup()"><i class="fas fa-rotate-left"></i> Clear</button>
-            <button class="settings-mini-btn accent" onclick="window.confirmGestureSetup()"><i class="fas fa-check"></i> Use this</button>
+            <button class="settings-mini-btn" onclick="window.clearPatternSetup()"><i class="fas fa-rotate-left"></i> Clear</button>
         </div>
     </div>
 </div>
