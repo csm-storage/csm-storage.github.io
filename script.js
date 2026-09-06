@@ -469,6 +469,13 @@ window.removeAccountPassword = id => {
  *  endpoint immediately instead of waiting for the once-daily Cron job.
  *  Safe to press repeatedly; each press processes another small batch. */
 window.forceOcrBacklog = async () => {
+    const btn = document.getElementById('forceOcrBtn');
+    // Guards against exactly what happened: rapid multi-tapping used to fire
+    // several overlapping requests that all read the SAME "still pending"
+    // list before any of them had written anything back, so they mostly
+    // OCR'd the same 20 files over and over instead of making real progress.
+    if (btn?.disabled) return;
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
     const label = document.getElementById('ocrStatusLabel');
     if (label) label.textContent = 'Status: running…';
     try {
@@ -484,6 +491,8 @@ window.forceOcrBacklog = async () => {
     } catch (e) {
         if (label) label.textContent = `Status: failed — ${e.message}`;
         showToast(`OCR backlog failed: ${e.message}`, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
     }
 };
 
@@ -1598,6 +1607,7 @@ function render() {
             <div class="dots" onclick="event.stopPropagation(); window.toggleMenu(event,'${file.id}')"><i class="fas fa-ellipsis-v"></i></div>
             <div id="menu-${file.id}" class="dropdown">${currentTab === 'trash' ? trashMenu : normalMenu}</div>
             ${acctNum ? `<div class="acct-num-badge" title="${acctLabel}">${acctNum}</div>` : ''}
+            ${file.ocrText ? `<div class="ocr-badge" title="Text found: ${file.ocrText.slice(0,80).replace(/"/g,'&quot;')}"><i class="fas fa-magnifying-glass"></i></div>` : ''}
             ${file.starred && !isLocked ? '<div class="star-badge"><i class="fas fa-star"></i></div>' : ''}
             ${(file.locked || acctLocked) ? '<div class="lock-badge"><i class="fas fa-shield-halved"></i></div>' : ''}
             <div class="preview" ${previewClick}>
@@ -2054,17 +2064,25 @@ window.showFileInfo = id => {
     const fo   = folders.find(f => f.id === file.folder);
     const date = file.time ? new Date(file.time).toLocaleString() : '—';
     const cached = file.offlineData ? '✅ Cached offline' : '⚡ Online only';
+    const ocrRow = file.cat === 'image'
+        ? (file.ocrDone
+            ? (file.ocrText
+                ? `<div><b style="color:var(--text)">OCR text found:</b><br><span style="font-style:italic;">"${file.ocrText.slice(0,300)}${file.ocrText.length>300?'…':''}"</span></div>`
+                : `<div><b style="color:var(--text)">OCR:</b> ✅ checked — no readable text found</div>`)
+            : `<div><b style="color:var(--text)">OCR:</b> ⏳ not processed yet</div>`)
+        : '';
     showModal({
         title: 'FILE DETAILS',
         body: `<div style="display:flex;flex-direction:column;gap:8px;font-size:0.75rem;color:var(--text-muted);">
             <div><b style="color:var(--text)">Name:</b> ${file.name || '—'}</div>
-            <div><b style="color:var(--text)">Type:</b> ${file.cat === 'video' ? 'Video' : 'Image'}</div>
+            <div><b style="color:var(--text)">Type:</b> ${file.cat === 'video' ? 'Video' : file.cat === 'file' ? 'Document' : 'Image'}</div>
             <div><b style="color:var(--text)">Size:</b> ${file.size || '—'}</div>
             <div><b style="color:var(--text)">Date:</b> ${date}</div>
             <div><b style="color:var(--text)">Folder:</b> ${fo ? fo.name : 'None'}</div>
             <div><b style="color:var(--text)">Starred:</b> ${file.starred ? '⭐ Yes' : 'No'}</div>
             <div><b style="color:var(--text)">Locked:</b> ${file.locked ? '🔒 Yes' : 'No'}</div>
             <div><b style="color:var(--text)">Cache:</b> ${cached}</div>
+            ${ocrRow}
         </div>`,
         btns: [{ label: 'Close', cls: 'modal-btn-cancel', action: closeModal }]
     });
