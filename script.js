@@ -58,7 +58,7 @@ async function getAuthToken() {
 /* ─── Storage growth trend (built entirely from existing file records —
    no extra data needed: each file already has a time + size) ────── */
 function buildStorageTrendSVG() {
-    const files = allFiles.filter(f => f.time && f.size);
+    const files = nonHiddenFiles().filter(f => f.time && f.size);
     if (!files.length) return null;
 
     const byDay = {};
@@ -124,9 +124,19 @@ function isAcctHidden(file) { return !!(file?.account && cloudinaryAccounts[file
 function isAcctLocked(file) { return !!(file?.account && cloudinaryAccounts[file.account]?.locked); }
 /** All files minus anything whose account is fully hidden — used everywhere
  *  stats/folders/grids are computed so a hidden account truly disappears. */
-function nonHiddenFiles() { return allFiles.filter(f => !isAcctHidden(f)); }
+function nonHiddenFiles() {
+    // Duress mode overrides everything else: only the pre-selected decoy
+    // files exist as far as the rest of the app is concerned.
+    if (duressActive) return allFiles.filter(f => f.duress);
+    return allFiles.filter(f => !isAcctHidden(f));
+}
 
 function renderAccountUsage() {
+    // Cache the live account list (hide/lock/enabled flags included) so
+    // offline app-opens see the REAL state instead of an empty object —
+    // see the comment in onAuthStateChanged for why this matters.
+    idbPut('settings', { key: 'cloudinaryAccounts', value: cloudinaryAccounts }).catch(() => {});
+
     const ids = getSortedAccountIds();
 
     // Slim summary button on the main page
@@ -238,6 +248,14 @@ function renderSettingsAccounts(ids) {
     }
 }
 
+/** Called once on entering the main app. Under duress mode this hides the
+ *  parts of the UI that would otherwise reveal real accounts/settings even
+ *  though the file grid itself is already limited to the decoy set. */
+function applyDuressUIRestrictions() {
+    document.querySelector('.cloud-accounts-section')?.classList.toggle('hidden', duressActive);
+    document.querySelector('.upload-btn')?.classList.toggle('hidden', duressActive);
+}
+
 /* ─── Settings tab (full-page) ───────────────────────────────────── */
 window.openSettings = (section) => {
     document.getElementById('settingsOverlay').classList.remove('hidden');
@@ -246,6 +264,11 @@ window.openSettings = (section) => {
     refreshPatternSettingsUI();
     renderAccountUsage();
     renderStorageTrend();
+    document.getElementById('settingsAccountsSection')?.classList.toggle('hidden', duressActive);
+    document.getElementById('settingsTrendSection')?.classList.toggle('hidden', duressActive);
+    document.getElementById('settingsDuressSection')?.classList.toggle('hidden', duressActive);
+    document.getElementById('settingsOcrSection')?.classList.toggle('hidden', duressActive);
+    refreshDuressSettingsUI();
     if (section === 'accounts') {
         setTimeout(() => document.getElementById('settingsAccountsSection')
             ?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
@@ -442,6 +465,28 @@ window.removeAccountPassword = id => {
 };
 
 
+/** Settings tab's "Force OCR now" button — calls the Worker's backlog
+ *  endpoint immediately instead of waiting for the once-daily Cron job.
+ *  Safe to press repeatedly; each press processes another small batch. */
+window.forceOcrBacklog = async () => {
+    const label = document.getElementById('ocrStatusLabel');
+    if (label) label.textContent = 'Status: running…';
+    try {
+        const token = await getAuthToken();
+        const res = await fetch(`${WORKER_URL}/cloudinary/ocr-backlog`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (label) label.textContent = `Status: processed ${data.processed} · ${data.remaining} remaining`;
+        showToast(`OCR: processed ${data.processed}, ${data.remaining} left`, 'success');
+    } catch (e) {
+        if (label) label.textContent = `Status: failed — ${e.message}`;
+        showToast(`OCR backlog failed: ${e.message}`, 'error');
+    }
+};
+
 window.syncCloudUsage = async () => {
     try {
         const token = await getAuthToken();
@@ -472,6 +517,10 @@ let appPasscode     = '2240';
 let passcodeEnabled = true;
 let unlockPattern    = null;      // array of dot indices (0-8), the saved unlock pattern
 let pcMode            = 'passcode'; // which UI is showing on the lock screen right now
+let duressPasscode   = null;      // optional secondary 4-digit code -> opens the decoy set instead
+let duressPattern    = null;      // optional secondary pattern -> same idea
+let duressActive     = false;     // true for the rest of this session once the duress code was used
+let pcAllowDuress     = false;    // only the main app-open lock screen checks for the duress code
 let passcodeCallback= null;
 let passcodeInput   = '';
 let sessionUnlocked = false;
@@ -673,10 +722,21 @@ onAuthStateChanged(auth, async user => {
     if (user) {
         document.getElementById('loginSection').classList.add('hidden');
 
-        // Instant offline load from IDB
-        const [cachedFiles, cachedFolders] = await Promise.all([
-            idbGetAll('files'), idbGetAll('folders')
+        // Instant offline load from IDB — files/folders AND the last-known
+        // account hide/lock state + passcode/pattern/duress settings.
+        // This must all load BEFORE anything renders: without the cached
+        // account state, isAcctHidden()/isAcctLocked() would see an EMPTY
+        // cloudinaryAccounts object while offline (the live Firebase
+        // listener never fires without a connection) and treat every
+        // account as neither hidden nor locked — silently bypassing both
+        // protections for as long as the device stays offline.
+        const [cachedFiles, cachedFolders, cachedAccounts, cachedSecurity] = await Promise.all([
+            idbGetAll('files'), idbGetAll('folders'),
+            idbGet('settings', 'cloudinaryAccounts'),
+            idbGet('settings', 'appSecurity'),
         ]);
+        if (cachedAccounts?.value)  cloudinaryAccounts = cachedAccounts.value;
+        if (cachedSecurity?.value)  applySettingsSnapshot(cachedSecurity.value);
         if (cachedFiles.length) {
             allFiles = cachedFiles; folders = cachedFolders;
             updateStats(); renderFolders(); render(); updateFolderSelect();
@@ -684,7 +744,9 @@ onAuthStateChanged(auth, async user => {
 
         // Must know the REAL passcodeEnabled/unlockPattern before deciding
         // which lock screen to show — otherwise this always falls back to
-        // the hardcoded numeric-passcode default.
+        // the hardcoded numeric-passcode default. Online, this refreshes
+        // everything above with the live values; offline, it's a no-op and
+        // the cached values loaded above are what's used instead.
         await fetchSettingsOnce();
 
         if (passcodeEnabled && !sessionUnlocked) {
@@ -693,7 +755,7 @@ onAuthStateChanged(auth, async user => {
                 document.getElementById('passcodeSection').classList.add('hidden');
                 showMain();
                 loadData(); loadFolders(); loadSettings();
-            });
+            }, true); // allowDuress — only the main app-open gate checks the duress code
         } else {
             showMain();
             loadData(); loadFolders(); loadSettings();
@@ -715,6 +777,7 @@ function showMain() {
     const mc = document.getElementById('mainContent');
     mc.classList.remove('hidden');
     mc.classList.add('fade-in');
+    applyDuressUIRestrictions();
     // Trigger AOS for newly visible elements
     setTimeout(() => {
         document.querySelectorAll('[data-aos]:not(.aos-in)').forEach(el => {
@@ -758,8 +821,9 @@ async function sha256Hex(text) {
 }
 let pendingAccountUnlock = null; // { hash, cb } — set while the account-password screen is showing
 
-function showPasscodeScreen(cb) {
+function showPasscodeScreen(cb, allowDuress = false) {
     passcodeCallback = cb; passcodeInput = '';
+    pcAllowDuress = allowDuress;
     document.getElementById('passcodeSection').classList.remove('hidden');
     pcMode = 'passcode';
     renderPcMode();
@@ -780,7 +844,9 @@ function renderPcMode() {
         cancelBtn?.classList.remove('hidden');
         document.getElementById('passcodeMessage').textContent = 'Draw your unlock pattern';
         initPatternGrid('patternSvg', path => {
-            if (patternsEqual(path, unlockPattern)) {
+            const isDuress = pcAllowDuress && duressPattern && patternsEqual(path, duressPattern);
+            if (patternsEqual(path, unlockPattern) || isDuress) {
+                duressActive = isDuress;
                 if (passcodeCallback) passcodeCallback();
                 passcodeCallback = null;
             } else {
@@ -917,8 +983,10 @@ function initPatternGrid(svgId, onComplete) {
 }
 
 /* ─── Pattern setup (draw twice to confirm, like a phone's pattern lock) ─ */
-let patternSetupFirst = null;
-window.openPatternSetup = () => {
+let patternSetupFirst  = null;
+let patternSetupTarget = 'unlock'; // 'unlock' | 'duress'
+window.openPatternSetup = (target = 'unlock') => {
+    patternSetupTarget = target;
     patternSetupFirst = null;
     document.getElementById('patSetupMsg').textContent = 'Connect at least 4 dots to set your pattern';
     document.getElementById('patternSetupOverlay').classList.remove('hidden');
@@ -933,16 +1001,35 @@ window.openPatternSetup = () => {
             document.getElementById('patSetupMsg').textContent = 'Draw the same pattern again to confirm';
             setTimeout(() => document.getElementById('patternSetupSvg')?._resetVisual?.(), 400);
         } else if (patternsEqual(path, patternSetupFirst)) {
-            unlockPattern = path;
-            if (navigator.onLine) {
-                update(ref(db, SETTINGS_PATH), { pattern: path })
-                    .then(() => showToast('Pattern saved', 'success'))
-                    .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+            if (patternSetupTarget === 'duress' && unlockPattern && patternsEqual(path, unlockPattern)) {
+                showToast('Duress pattern must differ from your real pattern', 'warning');
+                patternSetupFirst = null;
+                document.getElementById('patSetupMsg').textContent = 'Connect at least 4 dots to set your pattern';
+                setTimeout(() => document.getElementById('patternSetupSvg')?._resetVisual?.(), 400);
+                return;
+            }
+            if (patternSetupTarget === 'duress') {
+                duressPattern = path;
+                if (navigator.onLine) {
+                    update(ref(db, SETTINGS_PATH), { duressPattern: path })
+                        .then(() => showToast('Duress pattern saved', 'success'))
+                        .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+                } else {
+                    showToast('Offline — will sync once online', 'warning');
+                }
+                refreshDuressSettingsUI();
             } else {
-                showToast('Offline — pattern will sync once online', 'warning');
+                unlockPattern = path;
+                if (navigator.onLine) {
+                    update(ref(db, SETTINGS_PATH), { pattern: path })
+                        .then(() => showToast('Pattern saved', 'success'))
+                        .catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+                } else {
+                    showToast('Offline — pattern will sync once online', 'warning');
+                }
+                refreshPatternSettingsUI();
             }
             window.closePatternSetup();
-            refreshPatternSettingsUI();
         } else {
             showToast("Patterns didn't match — try again", 'error');
             patternSetupFirst = null;
@@ -951,6 +1038,7 @@ window.openPatternSetup = () => {
         }
     });
 };
+window.openDuressPatternSetup = () => window.openPatternSetup('duress');
 window.closePatternSetup = () => document.getElementById('patternSetupOverlay').classList.add('hidden');
 window.clearPatternSetup = () => {
     document.getElementById('patternSetupSvg')?._resetVisual?.();
@@ -969,13 +1057,86 @@ function refreshPatternSettingsUI() {
     if (label) label.textContent = hasPattern ? 'Change pattern' : 'Set pattern';
     document.getElementById('removePatternBtn')?.classList.toggle('hidden', !hasPattern);
 }
+
+/* ─── Duress mode setup ───────────────────────────────────────── */
+window.setDuressPasscode = () => {
+    showModal({
+        title: 'DURESS PASSCODE',
+        body: `<div style="display:flex;flex-direction:column;gap:10px;">
+            <div class="settings-row-sub" style="padding:0;">Must differ from your real passcode. Entering this code at the lock screen opens ONLY your decoy files — real content stays fully hidden, with no trace it exists.</div>
+            <input id="duressPwInput" type="text" inputmode="numeric" maxlength="4" class="modal-input" style="margin-bottom:0;text-align:center;letter-spacing:8px;" placeholder="4-digit code">
+        </div>`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: 'Save', cls: 'modal-btn-confirm', action: () => {
+                const code = document.getElementById('duressPwInput')?.value || '';
+                if (!/^\d{4}$/.test(code)) { showToast('Enter exactly 4 digits', 'warning'); return; }
+                if (code === appPasscode) { showToast('Must differ from your real passcode', 'warning'); return; }
+                closeModal();
+                duressPasscode = code;
+                if (navigator.onLine) {
+                    update(ref(db, SETTINGS_PATH), { duressPasscode: code })
+                        .then(() => showToast('Duress passcode saved', 'success'))
+                        .catch(e => showToast(`Failed: ${e.message}`, 'error'));
+                } else {
+                    showToast('Offline — will sync once online', 'warning');
+                }
+                refreshDuressSettingsUI();
+            }}
+        ]
+    });
+};
+function refreshDuressSettingsUI() {
+    const hasDp   = !!duressPasscode;
+    const hasDpat = Array.isArray(duressPattern) && duressPattern.length >= 4;
+    const l1 = document.getElementById('duressPasscodeBtnLabel'); if (l1) l1.textContent = hasDp ? 'Change' : 'Set';
+    const l2 = document.getElementById('duressPatternBtnLabel'); if (l2) l2.textContent = hasDpat ? 'Change' : 'Set';
+    const cnt = allFiles.filter(f => f.duress).length;
+    const countLabel = document.getElementById('duressCountLabel');
+    if (countLabel) countLabel.textContent = `${cnt} file(s) marked`;
+}
+/** Toggles a single file's decoy-set membership (per-file dropdown action). */
+window.toggleDuress = id => {
+    const file = allFiles.find(f => f.id === id);
+    if (!file) return;
+    const val = !file.duress;
+    file.duress = val;
+    render(); refreshDuressSettingsUI();
+    if (navigator.onLine) {
+        update(ref(db, `${DB_PATH}/${id}`), { duress: val })
+            .then(() => showToast(val ? 'Added to duress set' : 'Removed from duress set', 'success'))
+            .catch(e => showToast(`Failed: ${e.message}`, 'error'));
+    } else {
+        showToast('Offline — change will sync once online', 'warning');
+    }
+};
+/** Bulk-marks all currently-selected files as decoy content. */
+window.bulkAddToDuress = () => {
+    if (!selectedIds.size) return;
+    const updates = {};
+    selectedIds.forEach(id => {
+        const f = allFiles.find(x => x.id === id);
+        if (f) { f.duress = true; updates[`${DB_PATH}/${id}/duress`] = true; }
+    });
+    render(); refreshDuressSettingsUI();
+    if (navigator.onLine) {
+        update(ref(db), updates)
+            .then(() => showToast(`Added ${selectedIds.size} file(s) to duress set`, 'success'))
+            .catch(e => showToast(`Failed: ${e.message}`, 'error'));
+    } else {
+        showToast('Offline — change will sync once online', 'warning');
+    }
+};
+
 window.enterPasscode = num => {
     if (passcodeInput.length >= 4) return;
     passcodeInput += num;
     updatePasscodeDots();
     if (passcodeInput.length === 4) {
         setTimeout(() => {
-            if (passcodeInput === appPasscode) {
+            const isDuress = pcAllowDuress && duressPasscode && passcodeInput === duressPasscode;
+            if (passcodeInput === appPasscode || isDuress) {
+                duressActive = isDuress;
                 if (passcodeCallback) passcodeCallback();
                 passcodeCallback = null;
             } else {
@@ -1055,6 +1216,12 @@ function applySettingsSnapshot(s) {
     if (s?.passcode)        appPasscode     = s.passcode;
     if (s?.passcodeEnabled !== undefined) passcodeEnabled = s.passcodeEnabled;
     if (Array.isArray(s?.pattern)) unlockPattern = s.pattern;
+    if (s?.duressPasscode)        duressPasscode = s.duressPasscode;
+    if (Array.isArray(s?.duressPattern)) duressPattern = s.duressPattern;
+    // Cache the raw settings snapshot so offline app-opens still know the
+    // REAL passcode/pattern/duress state instead of falling back to the
+    // hardcoded in-memory defaults (see the comment in onAuthStateChanged).
+    if (s) idbPut('settings', { key: 'appSecurity', value: s }).catch(() => {});
 }
 /** One-time fetch, awaited BEFORE the passcode/gesture gate decides what to
  *  show — without this, the gate would use the hardcoded defaults (numeric
@@ -1186,7 +1353,9 @@ async function uploadQueuedItem(file, customName, folder, account) {
         size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
         folder:  folder || '',
         time:    Date.now(),
-        starred: false, locked: false, trash: false
+        ocrText: data.ocrText || '',
+        ocrDone: !!data.ocrDone,
+        starred: false, locked: false, trash: false, duress: false
     };
     const newRef = push(ref(db, DB_PATH));
     await set(newRef, rec);
@@ -1272,7 +1441,8 @@ function getVisibleFiles() {
     if (currentFolder !== 'all' && currentTab !== 'trash')
         list = list.filter(f => f.folder === currentFolder);
     if (searchText)
-        list = list.filter(f => (f.name || '').toLowerCase().includes(searchText.toLowerCase()));
+        list = list.filter(f => (f.name || '').toLowerCase().includes(searchText.toLowerCase())
+            || (f.ocrText || '').toLowerCase().includes(searchText.toLowerCase()));
     return list;
 }
 
@@ -1408,6 +1578,7 @@ function render() {
             <div class="dd-divider"></div>
             <div class="dd-item" onclick="window.star('${file.id}', ${!!file.starred})"><i class="fas fa-star"></i> ${file.starred ? 'Unstar' : 'Star'}</div>
             <div class="dd-item" onclick="window.toggleLock('${file.id}')"><i class="fas fa-${file.locked ? 'unlock' : 'lock'}"></i> ${file.locked ? 'Unlock' : 'Lock'}</div>
+            <div class="dd-item" onclick="window.toggleDuress('${file.id}')"><i class="fas fa-user-secret"></i> ${file.duress ? 'Remove from Duress Set' : 'Add to Duress Set'}</div>
             <div class="dd-item" onclick="window.copyLink('${file.url}')"><i class="fas fa-link"></i> Copy Link</div>
             <div class="dd-item" onclick="window.downloadFile('${file.url}','${file.name}')"><i class="fas fa-download"></i> Download</div>
             <div class="dd-divider"></div>
@@ -1462,6 +1633,7 @@ function updateMultiBarActions() {
         ad.innerHTML = `
             <button class="multi-btn" onclick="window.multiCopy()"><i class="fas fa-copy"></i> <span>Copy</span></button>
             <button class="multi-btn" onclick="window.multiStar()"><i class="fas fa-star"></i> <span>Star</span></button>
+            <button class="multi-btn" onclick="window.bulkAddToDuress()" title="Add to Duress Set"><i class="fas fa-user-secret"></i></button>
             <button class="multi-btn" onclick="window.multiDownload()"><i class="fas fa-download"></i></button>
             <button class="multi-btn danger" onclick="window.multiTrash()"><i class="fas fa-trash"></i></button>`;
     }
@@ -1646,7 +1818,9 @@ async function uploadSingleFile(file, customName, folder, onProgress, account) {
                     size:    (file.size / 1024 / 1024).toFixed(2) + ' MB',
                     folder:  folder || '',
                     time:    Date.now(),
-                    starred: false, locked: false, trash: false
+                    ocrText: data.ocrText || '',
+                    ocrDone: !!data.ocrDone,
+                    starred: false, locked: false, trash: false, duress: false
                 };
                 const newRef = push(ref(db, DB_PATH));
                 await set(newRef, rec);

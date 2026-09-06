@@ -364,6 +364,32 @@
             </div>
         </section>
 
+        <section class="settings-section" id="settingsDuressSection">
+            <div class="settings-section-hdr"><span><i class="fas fa-user-secret"></i> Duress Mode</span></div>
+            <div class="settings-row-sub" style="padding:0 2px 10px;">Entering the duress code at the lock screen opens ONLY the files you mark below as decoys — everything else (real accounts, real files, this very section) stays completely hidden, with no trace.</div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Duress passcode</span>
+                    <span class="settings-row-sub">Must differ from your real passcode</span>
+                </div>
+                <button class="settings-mini-btn" onclick="window.setDuressPasscode()"><i class="fas fa-key"></i> <span id="duressPasscodeBtnLabel">Set</span></button>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Duress pattern</span>
+                    <span class="settings-row-sub">Must differ from your real pattern</span>
+                </div>
+                <button class="settings-mini-btn" onclick="window.openDuressPatternSetup()"><i class="fas fa-diagram-project"></i> <span id="duressPatternBtnLabel">Set</span></button>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span>Decoy files</span>
+                    <span class="settings-row-sub" id="duressCountLabel">0 file(s) marked</span>
+                </div>
+                <span class="settings-row-sub">Use "Add to Duress Set" on any file's ⋮ menu, or select multiple and use the bulk action</span>
+            </div>
+        </section>
+
         <section class="settings-section" id="settingsAccountsSection">
             <div class="settings-section-hdr">
                 <span><i class="fas fa-cloud"></i> Cloud Storage Accounts</span>
@@ -380,6 +406,17 @@
             <div class="settings-section-hdr"><span><i class="fas fa-chart-line"></i> Storage Growth Trend</span></div>
             <div class="settings-row-sub" style="padding:0 2px 10px;">Cumulative storage used over time, based on each file's upload date.</div>
             <div id="storageTrendChart"></div>
+        </section>
+
+        <section class="settings-section" id="settingsOcrSection">
+            <div class="settings-section-hdr">
+                <span><i class="fas fa-magnifying-glass"></i> OCR Search</span>
+                <div class="settings-section-actions">
+                    <button class="settings-mini-btn accent" onclick="window.forceOcrBacklog()"><i class="fas fa-play"></i> Force OCR now</button>
+                </div>
+            </div>
+            <div class="settings-row-sub" style="padding:0 2px 6px;">New images get OCR'd automatically on upload. A daily background job also catches up on any images that missed it (no key configured yet, or the free daily quota was hit) — or press the button to run that catch-up immediately.</div>
+            <div class="settings-row-sub" id="ocrStatusLabel" style="padding:0 2px;">Status: not checked yet</div>
         </section>
 
     </div>
