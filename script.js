@@ -186,6 +186,9 @@ function renderSettingsAccounts(ids) {
                         ${a.default
                             ? `<span class="acct-default-tag"><i class="fas fa-star"></i> Default</span>`
                             : `<button class="settings-mini-btn" onclick="window.setDefaultAccount('${id}')">Set Default</button>`}
+                        ${a.isScreenshotTarget
+                            ? `<span class="acct-default-tag" style="color:#7aa2ff;background:rgba(122,162,255,0.1);border-color:rgba(122,162,255,0.25);"><i class="fas fa-camera"></i> Screenshots</span>`
+                            : `<button class="settings-mini-btn" onclick="window.setScreenshotAccount('${id}')" title="Screenshots (by filename) auto-upload here when Auto is selected"><i class="fas fa-camera"></i> Set for Screenshots</button>`}
                     </div>
                     <div class="acct-bar-wrap"><div class="acct-bar acct-bar-${level}" style="width:${pct}%"></div></div>
                     <div class="acct-sub">${(used/1024).toFixed(2)} GB used · ${a.cloud_name || id} · <span class="acct-${level}">${pct.toFixed(1)}%</span></div>
@@ -322,6 +325,27 @@ window.setDefaultAccount = id => {
     }
     showToast('Default upload account set', 'success');
 };
+/** Marks one account as the auto-target for files whose name looks like a
+ *  screenshot — see looksLikeScreenshot(). Exclusive like "Default": only
+ *  one account can hold this at a time. Only kicks in when the upload
+ *  popup's account selector is left on "Auto" — an explicit manual choice
+ *  always wins. */
+window.setScreenshotAccount = id => {
+    const ids = getSortedAccountIds();
+    const updates = {};
+    ids.forEach(aid => {
+        if (!cloudinaryAccounts[aid]) cloudinaryAccounts[aid] = {};
+        cloudinaryAccounts[aid].isScreenshotTarget = (aid === id);
+        updates[`${ACCOUNTS_PATH}/${aid}/isScreenshotTarget`] = (aid === id);
+    });
+    renderAccountUsage();
+    if (navigator.onLine) {
+        update(ref(db), updates).catch(e => showToast(`Failed to save: ${e.message}`, 'error'));
+    } else {
+        showToast('Offline — will sync once online', 'warning');
+    }
+    showToast('Screenshot uploads will now default to this account', 'success');
+};
 
 window.deleteAccountEntry = id => {
     const label = cloudinaryAccounts[id]?.label || id;
@@ -393,6 +417,58 @@ window.tagUntaggedFiles = id => {
                     }
                 } else {
                     showToast('Offline — redo this once online', 'warning');
+                }
+            }}
+        ]
+    });
+};
+
+/** Dropdown "Move to Account" / "Copy to Account" — the actual asset gets
+ *  downloaded and re-uploaded under the target account's own credentials
+ *  by the Worker (only it holds the API secrets), so this always needs
+ *  to be online. */
+window.openAccountTransferPicker = (id, mode) => {
+    const file = allFiles.find(f => f.id === id);
+    if (!file) return;
+    if (!navigator.onLine) { showToast('Moving/copying between accounts needs an internet connection', 'warning'); return; }
+    const ids = getSortedAccountIds().filter(aid => aid !== file.account && cloudinaryAccounts[aid]?.enabled !== false);
+    if (!ids.length) { showToast('No other enabled account available', 'warning'); return; }
+    const options = ids.map(aid => `<option value="${aid}">${cloudinaryAccounts[aid]?.label || aid}</option>`).join('');
+    showModal({
+        title: mode === 'move' ? 'MOVE TO ACCOUNT' : 'COPY TO ACCOUNT',
+        body: `<div style="display:flex;flex-direction:column;gap:10px;">
+            <div class="settings-row-sub" style="padding:0;">${mode === 'move'
+                ? 'Moves the actual file to another Cloudinary account and deletes the original there.'
+                : 'Uploads a duplicate to another Cloudinary account — the original stays exactly where it is.'}</div>
+            <select id="transferTargetSelect" class="modal-input" style="margin-bottom:0;">${options}</select>
+        </div>`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: mode === 'move' ? 'Move' : 'Copy', cls: 'modal-btn-confirm', action: async () => {
+                const targetAccountId = document.getElementById('transferTargetSelect')?.value;
+                if (!targetAccountId) return;
+                closeModal();
+                showToast(`${mode === 'move' ? 'Moving' : 'Copying'}… this can take a moment`, 'info');
+                try {
+                    const token = await getAuthToken();
+                    const res = await fetch(`${WORKER_URL}/cloudinary/transfer`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ fileId: id, targetAccountId, mode }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+                    if (mode === 'move') {
+                        Object.assign(file, { url: data.url, publicId: data.publicId, account: data.account });
+                        await idbPut('files', file);
+                        render();
+                    }
+                    // Copy: the Worker already pushed the new record straight
+                    // to Firebase — the live listener (when online) picks it
+                    // up on its own, no local patching needed here.
+                    showToast(mode === 'move' ? 'File moved' : 'File copied', 'success');
+                } catch (e) {
+                    showToast(`${mode === 'move' ? 'Move' : 'Copy'} failed: ${e.message}`, 'error');
                 }
             }}
         ]
@@ -763,6 +839,13 @@ onAuthStateChanged(auth, async user => {
                 sessionUnlocked = true;
                 document.getElementById('passcodeSection').classList.add('hidden');
                 showMain();
+                // loadData() only re-renders once its Firebase listener fires,
+                // which never happens offline — so without this, a successful
+                // duress (or normal) unlock offline would keep showing whatever
+                // was drawn BEFORE the unlock decision (the full, unfiltered
+                // cached list), duress filtering never actually applied.
+                // Force a fresh render right now, online or not.
+                updateStats(); renderFolders(); render(); updateFolderSelect();
                 loadData(); loadFolders(); loadSettings();
             }, true); // allowDuress — only the main app-open gate checks the duress code
         } else {
@@ -1490,6 +1573,34 @@ function buildLbItems(list) {
 }
 
 /* ─── Render ─────────────────────────────────────────────────── */
+/** Screenshot detection is filename-based — reliable for Android's default
+ *  "Screenshot_YYYYMMDD-HHMMSS.png" naming (and similar patterns from
+ *  Windows/other tools), with no EXIF/ML analysis needed. If a file was
+ *  renamed and doesn't match, the per-file "Move to Account" action in the
+ *  dropdown menu covers the miss manually. */
+function looksLikeScreenshot(filename) {
+    const n = (filename || '').toLowerCase();
+    return n.includes('screenshot')
+        || n.includes('screen shot')
+        || n.includes('screen_shot')
+        || n.includes('screen-shot')
+        || n.includes('scrnshot')
+        || n.includes('screencapture')
+        || n.includes('screen capture');
+}
+/** Resolves which account a single file in the current upload batch should
+ *  go to: an explicit account picked in the upload popup ALWAYS wins; only
+ *  when that's left on "Auto" does screenshot auto-routing kick in. */
+function resolveUploadAccountForFile(file, chosenAccount) {
+    if (chosenAccount) return chosenAccount;
+    if (looksLikeScreenshot(file.name)) {
+        const ssId = getSortedAccountIds().find(id =>
+            cloudinaryAccounts[id]?.isScreenshotTarget && cloudinaryAccounts[id]?.enabled !== false);
+        if (ssId) return ssId;
+    }
+    return '';
+}
+
 /** Picks a FontAwesome icon name for a non-media "file" card based on extension. */
 function getDocIcon(ext) {
     ext = (ext || '').toLowerCase();
@@ -1588,6 +1699,8 @@ function render() {
             <div class="dd-item" onclick="window.star('${file.id}', ${!!file.starred})"><i class="fas fa-star"></i> ${file.starred ? 'Unstar' : 'Star'}</div>
             <div class="dd-item" onclick="window.toggleLock('${file.id}')"><i class="fas fa-${file.locked ? 'unlock' : 'lock'}"></i> ${file.locked ? 'Unlock' : 'Lock'}</div>
             <div class="dd-item" onclick="window.toggleDuress('${file.id}')"><i class="fas fa-user-secret"></i> ${file.duress ? 'Remove from Duress Set' : 'Add to Duress Set'}</div>
+            <div class="dd-item" onclick="window.openAccountTransferPicker('${file.id}','move')"><i class="fas fa-right-left"></i> Move to Account</div>
+            <div class="dd-item" onclick="window.openAccountTransferPicker('${file.id}','copy')"><i class="fas fa-copy"></i> Copy to Account</div>
             <div class="dd-item" onclick="window.copyLink('${file.url}')"><i class="fas fa-link"></i> Copy Link</div>
             <div class="dd-item" onclick="window.downloadFile('${file.url}','${file.name}')"><i class="fas fa-download"></i> Download</div>
             <div class="dd-divider"></div>
@@ -1750,7 +1863,8 @@ window.startUpload = async () => {
     if (!navigator.onLine) {
         // Queue for later
         for (const item of pendingUploadFiles) {
-            await addToPendingUploads({ file: item.file, customName, folder, account: chosenAccount });
+            const fileAccount = resolveUploadAccountForFile(item.file, chosenAccount);
+            await addToPendingUploads({ file: item.file, customName, folder, account: fileAccount });
             item.status = 'queued';
         }
         renderStagedFiles();
@@ -1772,6 +1886,7 @@ window.startUpload = async () => {
 
     for (let i = 0; i < pendingUploadFiles.length; i++) {
         const item = pendingUploadFiles[i];
+        const fileAccount = resolveUploadAccountForFile(item.file, chosenAccount);
         upName.textContent = item.file.name;
         upPct.textContent  = '0%';
         upBar.style.width  = '0%';
@@ -1779,7 +1894,7 @@ window.startUpload = async () => {
             await uploadSingleFile(item.file, customName, folder, pct => {
                 upBar.style.width = pct + '%';
                 upPct.textContent  = pct + '%';
-            }, chosenAccount);
+            }, fileAccount);
             item.status = 'done';
         } catch (e) {
             item.status = 'error';
