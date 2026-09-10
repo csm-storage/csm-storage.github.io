@@ -427,10 +427,62 @@ window.tagUntaggedFiles = id => {
  *  downloaded and re-uploaded under the target account's own credentials
  *  by the Worker (only it holds the API secrets), so this always needs
  *  to be online. */
+/** Adjusts an account's tracked used_mb by a delta (read-then-write —
+ *  fine for this app's low-concurrency personal-use scale). Used by the
+ *  relabel-based move/copy below so account usage bars stay meaningful
+ *  even though no physical Cloudinary transfer happens. */
+async function fbAdjustUsage(accountId, deltaMb) {
+    if (!accountId || !navigator.onLine) return;
+    try {
+        const snap = await get(ref(db, `${ACCOUNTS_PATH}/${accountId}/used_mb`));
+        const next = Math.max((Number(snap.val()) || 0) + deltaMb, 0);
+        await update(ref(db, `${ACCOUNTS_PATH}/${accountId}`), { used_mb: next });
+        if (cloudinaryAccounts[accountId]) cloudinaryAccounts[accountId].used_mb = next;
+        renderAccountUsage();
+    } catch (e) {
+        console.error(`Usage adjust failed for ${accountId}:`, e.message);
+    }
+}
+
+/** Relabels which account a file "belongs to" — instant, Firebase-only,
+ *  no Cloudinary API calls. The physical asset never moves; only which
+ *  account's hide/lock/enabled toggles and usage bar it counts against
+ *  changes. "Copy" adds a second Firebase listing pointing at the SAME
+ *  underlying Cloudinary asset (a shared reference, not a real duplicate
+ *  upload) so no extra storage is actually used on Cloudinary's side. */
+async function relabelFileAccount(file, targetAccountId, mode, { silent = false } = {}) {
+    const sizeMb = parseFloat(file.size) || 0;
+    const oldAccountId = file.account;
+    try {
+        if (mode === 'move') {
+            file.account = targetAccountId;
+            if (navigator.onLine) {
+                await update(ref(db, `${DB_PATH}/${file.id}`), { account: targetAccountId });
+                await fbAdjustUsage(oldAccountId, -sizeMb);
+                await fbAdjustUsage(targetAccountId, sizeMb);
+            } else {
+                await idbPut('files', file);
+            }
+            render();
+            if (!silent) showToast(navigator.onLine ? 'File relabeled to the new account' : 'Offline — change will sync once online', navigator.onLine ? 'success' : 'warning');
+        } else {
+            if (!navigator.onLine) { if (!silent) showToast('Copying needs an internet connection', 'warning'); return; }
+            const { id: _drop, ...rest } = file;
+            const newRec = { ...rest, account: targetAccountId, time: Date.now() };
+            const newRef = push(ref(db, DB_PATH));
+            await set(newRef, newRec);
+            await fbAdjustUsage(targetAccountId, sizeMb);
+            if (!silent) showToast('Listing copied to the new account', 'success');
+        }
+    } catch (e) {
+        if (!silent) showToast(`Failed: ${e.message}`, 'error');
+        throw e;
+    }
+}
+
 window.openAccountTransferPicker = (id, mode) => {
     const file = allFiles.find(f => f.id === id);
     if (!file) return;
-    if (!navigator.onLine) { showToast('Moving/copying between accounts needs an internet connection', 'warning'); return; }
     const ids = getSortedAccountIds().filter(aid => aid !== file.account && cloudinaryAccounts[aid]?.enabled !== false);
     if (!ids.length) { showToast('No other enabled account available', 'warning'); return; }
     const options = ids.map(aid => `<option value="${aid}">${cloudinaryAccounts[aid]?.label || aid}</option>`).join('');
@@ -438,8 +490,8 @@ window.openAccountTransferPicker = (id, mode) => {
         title: mode === 'move' ? 'MOVE TO ACCOUNT' : 'COPY TO ACCOUNT',
         body: `<div style="display:flex;flex-direction:column;gap:10px;">
             <div class="settings-row-sub" style="padding:0;">${mode === 'move'
-                ? 'Moves the actual file to another Cloudinary account and deletes the original there.'
-                : 'Uploads a duplicate to another Cloudinary account — the original stays exactly where it is.'}</div>
+                ? 'Relabels this file as belonging to another account — instant, no re-upload. The physical file itself stays exactly where it is on Cloudinary; only which account it counts against (and which account has hide/lock control over it) changes.'
+                : 'Adds a second listing for this file under another account (a shared reference to the same file — no extra Cloudinary storage used).'}</div>
             <select id="transferTargetSelect" class="modal-input" style="margin-bottom:0;">${options}</select>
         </div>`,
         btns: [
@@ -448,28 +500,7 @@ window.openAccountTransferPicker = (id, mode) => {
                 const targetAccountId = document.getElementById('transferTargetSelect')?.value;
                 if (!targetAccountId) return;
                 closeModal();
-                showToast(`${mode === 'move' ? 'Moving' : 'Copying'}… this can take a moment`, 'info');
-                try {
-                    const token = await getAuthToken();
-                    const res = await fetch(`${WORKER_URL}/cloudinary/transfer`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                        body: JSON.stringify({ fileId: id, targetAccountId, mode }),
-                    });
-                    const data = await res.json();
-                    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-                    if (mode === 'move') {
-                        Object.assign(file, { url: data.url, publicId: data.publicId, account: data.account });
-                        await idbPut('files', file);
-                        render();
-                    }
-                    // Copy: the Worker already pushed the new record straight
-                    // to Firebase — the live listener (when online) picks it
-                    // up on its own, no local patching needed here.
-                    showToast(mode === 'move' ? 'File moved' : 'File copied', 'success');
-                } catch (e) {
-                    showToast(`${mode === 'move' ? 'Move' : 'Copy'} failed: ${e.message}`, 'error');
-                }
+                await relabelFileAccount(file, targetAccountId, mode);
             }}
         ]
     });
@@ -2434,7 +2465,6 @@ window.multiDownload = async () => {
  *  file. Files already on the chosen target are silently skipped. */
 window.multiTransferToAccount = mode => {
     if (!selectedIds.size) return;
-    if (!navigator.onLine) { showToast('Moving/copying between accounts needs an internet connection', 'warning'); return; }
     const files = [...selectedIds].map(id => allFiles.find(f => f.id === id)).filter(Boolean);
     if (!files.length) return;
     const targetIds = getSortedAccountIds().filter(aid => cloudinaryAccounts[aid]?.enabled !== false);
@@ -2443,7 +2473,7 @@ window.multiTransferToAccount = mode => {
     showModal({
         title: mode === 'move' ? `MOVE ${files.length} FILES` : `COPY ${files.length} FILES`,
         body: `<div style="display:flex;flex-direction:column;gap:10px;">
-            <div class="settings-row-sub" style="padding:0;">${mode === 'move' ? 'Moves' : 'Copies'} ${files.length} selected file(s) to another Cloudinary account (one request per file — this can take a moment). Files already on the target account are skipped.</div>
+            <div class="settings-row-sub" style="padding:0;">${mode === 'move' ? 'Relabels' : 'Adds a second listing for'} ${files.length} selected file(s) under another account — instant, no re-upload, no physical Cloudinary transfer. Files already on the target account are skipped.</div>
             <select id="bulkTransferTarget" class="modal-input" style="margin-bottom:0;">${options}</select>
         </div>`,
         btns: [
@@ -2452,27 +2482,16 @@ window.multiTransferToAccount = mode => {
                 const targetAccountId = document.getElementById('bulkTransferTarget')?.value;
                 if (!targetAccountId) return;
                 closeModal();
-                showToast(`Starting ${mode} of ${files.length} file(s)…`, 'info');
+                if (!navigator.onLine && mode === 'copy') { showToast('Copying needs an internet connection', 'warning'); return; }
                 let done = 0, skipped = 0, failed = 0;
                 for (const file of files) {
                     if (file.account === targetAccountId) { skipped++; continue; }
                     try {
-                        const token = await getAuthToken();
-                        const res = await fetch(`${WORKER_URL}/cloudinary/transfer`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                            body: JSON.stringify({ fileId: file.id, targetAccountId, mode }),
-                        });
-                        const data = await res.json();
-                        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-                        if (mode === 'move') {
-                            Object.assign(file, { url: data.url, publicId: data.publicId, account: data.account });
-                            await idbPut('files', file);
-                        }
+                        await relabelFileAccount(file, targetAccountId, mode, { silent: true });
                         done++;
                     } catch (e) {
                         failed++;
-                        console.error(`Transfer failed for ${file.name}:`, e.message);
+                        console.error(`Relabel failed for ${file.name}:`, e.message);
                     }
                 }
                 render();
