@@ -1754,10 +1754,11 @@ function updateMultiBarActions() {
             <button class="multi-btn danger" onclick="window.multiPermanentDelete()"><i class="fas fa-fire"></i> <span>Delete</span></button>`;
     } else {
         ad.innerHTML = `
-            <button class="multi-btn" onclick="window.multiCopy()"><i class="fas fa-copy"></i> <span>Copy</span></button>
+            <button class="multi-btn" onclick="window.multiMoveToAccount()" title="Move to Account"><i class="fas fa-right-left"></i></button>
+            <button class="multi-btn" onclick="window.multiCopyToAccount()" title="Copy to Account"><i class="fas fa-copy"></i></button>
             <button class="multi-btn" onclick="window.multiStar()"><i class="fas fa-star"></i> <span>Star</span></button>
             <button class="multi-btn" onclick="window.bulkAddToDuress()" title="Add to Duress Set"><i class="fas fa-user-secret"></i></button>
-            <button class="multi-btn" onclick="window.multiDownload()"><i class="fas fa-download"></i></button>
+            <button class="multi-btn" onclick="window.multiDownload()" title="Download all as .zip"><i class="fas fa-download"></i></button>
             <button class="multi-btn danger" onclick="window.multiTrash()"><i class="fas fa-trash"></i></button>`;
     }
 }
@@ -2382,15 +2383,111 @@ window.multiPermanentDelete = () => {
         ]
     });
 };
-window.multiDownload = () => {
-    for (const id of selectedIds) {
-        const f = allFiles.find(x => x.id === id);
-        if (f) window.downloadFile(f.url, f.name);
+/** Downloads all selected files bundled into ONE .zip (via JSZip, loaded
+ *  from cdnjs — no server involvement needed, Cloudinary URLs are public
+ *  GETs with permissive CORS). Falls back to one-by-one browser downloads
+ *  if JSZip fails to load for any reason. */
+window.multiDownload = async () => {
+    if (!selectedIds.size) return;
+    const files = [...selectedIds].map(id => allFiles.find(f => f.id === id)).filter(Boolean);
+    if (!files.length) return;
+
+    if (typeof JSZip === 'undefined') {
+        showToast('Zip library unavailable — downloading files individually instead', 'warning');
+        files.forEach(f => window.downloadFile(f.url, f.name));
+        return;
+    }
+
+    showToast(`Zipping ${files.length} file(s)…`, 'info');
+    try {
+        const zip = new JSZip();
+        const usedNames = new Set();
+        let done = 0;
+        for (const f of files) {
+            try {
+                const res = await fetch(f.url);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const blob = await res.blob();
+                let name = (f.name || f.id) + (f.ext ? `.${f.ext}` : (f.cat === 'video' ? '.mp4' : '.jpg'));
+                while (usedNames.has(name)) name = `_${name}`; // avoid collisions inside the zip
+                usedNames.add(name);
+                zip.file(name, blob);
+            } catch (e) {
+                console.error(`Skipped ${f.name} in zip:`, e.message);
+            }
+            done++;
+        }
+        const content = await zip.generateAsync({ type: 'blob' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(content);
+        a.download = `csm-drive-${Date.now()}.zip`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+        showToast(`Downloaded ${done} file(s) as a zip`, 'success');
+    } catch (e) {
+        showToast(`Zip failed: ${e.message} — try individual downloads`, 'error');
     }
 };
-window.multiCopy = () => {
-    if (selectedIds.size) showFolderPicker([...selectedIds][0], false);
+
+/** Bulk "Move to Account" / "Copy to Account" — same underlying Worker
+ *  endpoint as the single-file version, just looped over every selected
+ *  file. Files already on the chosen target are silently skipped. */
+window.multiTransferToAccount = mode => {
+    if (!selectedIds.size) return;
+    if (!navigator.onLine) { showToast('Moving/copying between accounts needs an internet connection', 'warning'); return; }
+    const files = [...selectedIds].map(id => allFiles.find(f => f.id === id)).filter(Boolean);
+    if (!files.length) return;
+    const targetIds = getSortedAccountIds().filter(aid => cloudinaryAccounts[aid]?.enabled !== false);
+    if (!targetIds.length) { showToast('No enabled account available', 'warning'); return; }
+    const options = targetIds.map(aid => `<option value="${aid}">${cloudinaryAccounts[aid]?.label || aid}</option>`).join('');
+    showModal({
+        title: mode === 'move' ? `MOVE ${files.length} FILES` : `COPY ${files.length} FILES`,
+        body: `<div style="display:flex;flex-direction:column;gap:10px;">
+            <div class="settings-row-sub" style="padding:0;">${mode === 'move' ? 'Moves' : 'Copies'} ${files.length} selected file(s) to another Cloudinary account (one request per file — this can take a moment). Files already on the target account are skipped.</div>
+            <select id="bulkTransferTarget" class="modal-input" style="margin-bottom:0;">${options}</select>
+        </div>`,
+        btns: [
+            { label: 'Cancel', cls: 'modal-btn-cancel', action: closeModal },
+            { label: mode === 'move' ? 'Move All' : 'Copy All', cls: 'modal-btn-confirm', action: async () => {
+                const targetAccountId = document.getElementById('bulkTransferTarget')?.value;
+                if (!targetAccountId) return;
+                closeModal();
+                showToast(`Starting ${mode} of ${files.length} file(s)…`, 'info');
+                let done = 0, skipped = 0, failed = 0;
+                for (const file of files) {
+                    if (file.account === targetAccountId) { skipped++; continue; }
+                    try {
+                        const token = await getAuthToken();
+                        const res = await fetch(`${WORKER_URL}/cloudinary/transfer`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                            body: JSON.stringify({ fileId: file.id, targetAccountId, mode }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+                        if (mode === 'move') {
+                            Object.assign(file, { url: data.url, publicId: data.publicId, account: data.account });
+                            await idbPut('files', file);
+                        }
+                        done++;
+                    } catch (e) {
+                        failed++;
+                        console.error(`Transfer failed for ${file.name}:`, e.message);
+                    }
+                }
+                render();
+                selectedIds.clear();
+                updateMultiBar();
+                showToast(
+                    `${mode === 'move' ? 'Moved' : 'Copied'} ${done}${skipped ? `, skipped ${skipped}` : ''}${failed ? `, failed ${failed}` : ''}`,
+                    failed ? 'warning' : 'success'
+                );
+            }}
+        ]
+    });
 };
+window.multiMoveToAccount = () => window.multiTransferToAccount('move');
+window.multiCopyToAccount = () => window.multiTransferToAccount('copy');
 
 /* ─── Modal ──────────────────────────────────────────────────── */
 function showModal({ title, body, input, btns }) {
